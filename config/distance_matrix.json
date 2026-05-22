@@ -1,0 +1,137 @@
+{
+  "comment": "Distance matrix для Planning Agent - популярные маршруты в Грузии",
+  "updated": "2024-02-07",
+  "distances": {
+    "Tbilisi-Batumi": {
+      "km": 380,
+      "hours": 5.5,
+      "description": "Main highway via Kutaisi"
+    },
+    "Tbilisi-Kutaisi": {
+      "km": 220,
+      "hours": 3.5,
+      "description": "Highway west"
+    },
+    "Tbilisi-Mtskheta": {
+      "km": 20,
+      "hours": 0.5,
+      "description": "Historic capital, very close"
+    },
+    "Tbilisi-Sighnaghi": {
+      "km": 110,
+      "hours": 2.0,
+      "description": "Kakheti wine region"
+    },
+    "Tbilisi-Kazbegi": {
+      "km": 165,
+      "hours": 3.0,
+      "description": "Georgian Military Highway"
+    },
+    "Tbilisi-Borjomi": {
+      "km": 160,
+      "hours": 2.5,
+      "description": "Spa town in mountains"
+    },
+    "Tbilisi-Telavi": {
+      "km": 95,
+      "hours": 1.5,
+      "description": "Kakheti region center"
+    },
+    "Kutaisi-Batumi": {
+      "km": 150,
+      "hours": 2.5,
+      "description": "West coast route"
+    },
+    "Kutaisi-Mestia": {
+      "km": 235,
+      "hours": 5.5,
+      "description": "Mountain route to Svaneti"
+    },
+    "Sighnaghi-Telavi": {
+      "km": 45,
+      "hours": 1.0,
+      "description": "Within Kakheti"
+    },
+    "Borjomi-Bakuriani": {
+      "km": 30,
+      "hours": 0.5,
+      "description": "Mountain resort nearby"
+    },
+    "Batumi-Gonio": {
+      "km": 12,
+      "hours": 0.3,
+      "description": "Beach towns close"
+    },
+    "Tbilisi-Gori": {
+      "km": 85,
+      "hours": 1.5,
+      "description": "Stalin's birthplace"
+    },
+    "Gori-Uplistsikhe": {
+      "km": 12,
+      "hours": 0.25,
+      "description": "Ancient cave city nearby"
+    },
+    "Tbilisi-Ananuri": {
+      "km": 70,
+      "hours": 1.2,
+      "description": "Fortress on highway to Kazbegi"
+    },
+    "Ananuri-Gudauri": {
+      "km": 50,
+      "hours": 1.0,
+      "description": "Ski resort"
+    },
+    "Gudauri-Kazbegi": {
+      "km": 45,
+      "hours": 1.0,
+      "description": "Mountain route"
+    },
+    "Kutaisi-Tskaltubo": {
+      "km": 9,
+      "hours": 0.25,
+      "description": "Spa town"
+    },
+    "Kutaisi-Prometheus-Cave": {
+      "km": 50,
+      "hours": 1.0,
+      "description": "Famous cave"
+    },
+    "Batumi-Makhuntseti": {
+      "km": 30,
+      "hours": 0.75,
+      "description": "Waterfall"
+    }
+  },
+  "regions": {
+    "Tbilisi": {
+      "type": "city",
+      "coordinates": {"lat": 41.7151, "lon": 44.8271}
+    },
+    "Kakheti": {
+      "type": "region",
+      "main_cities": ["Telavi", "Sighnaghi"],
+      "description": "Wine region"
+    },
+    "Adjara": {
+      "type": "region",
+      "main_cities": ["Batumi", "Gonio"],
+      "description": "Black Sea coast"
+    },
+    "Svaneti": {
+      "type": "region",
+      "main_cities": ["Mestia", "Ushguli"],
+      "description": "High mountain region"
+    },
+    "Samtskhe-Javakheti": {
+      "type": "region",
+      "main_cities": ["Borjomi", "Bakuriani"],
+      "description": "Mountain spa region"
+    }
+  },
+  "notes": {
+    "usage": "Planning Agent использует эту матрицу для БЫСТРОЙ оценки расстояний ВО ВРЕМЯ планирования",
+    "fallback": "Если маршрута нет в матрице, используй haversine distance * 1.3 (учёт дорог)",
+    "speed": "Средняя скорость ~60 км/ч для гор, ~80 км/ч для магистралей"
+  }
+}
