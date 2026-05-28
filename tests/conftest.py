@@ -1,5 +1,11 @@
 # tests/conftest.py
 """Shared fixtures for all tests."""
+# tests/conftest.py
+"""Shared fixtures for all tests."""
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import pytest
 

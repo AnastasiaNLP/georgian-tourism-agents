@@ -3,6 +3,7 @@ Runtime settings for Georgian Tourism Agent.
 
 This module is the small, explicit configuration surface used by runtime code.
 It reads only process environment variables; it does not load `.env`.
+All variables listed in `.env.example` should be reflected here.
 """
 
 import os
@@ -39,7 +40,16 @@ class Settings(BaseModel, frozen=True):
 
     # Geo / weather
     ors_api_key: Optional[str] = None
+    mapbox_token: Optional[str] = None
     openweather_api_key: Optional[str] = None
+
+    # Media providers
+    unsplash_url: Optional[str] = None
+    unsplash_access_key: Optional[str] = None
+    unsplash_secret_key: Optional[str] = None
+    cloudinary_cloud_name: Optional[str] = None
+    cloudinary_api_key: Optional[str] = None
+    cloudinary_api_secret: Optional[str] = None
 
     # LangSmith
     langsmith_api_key: Optional[str] = None
@@ -97,7 +107,14 @@ def get_settings() -> Settings:
         upstash_redis_url=os.getenv("UPSTASH_REDIS_URL"),
         upstash_redis_token=os.getenv("UPSTASH_REDIS_TOKEN"),
         ors_api_key=os.getenv("ORS_API_KEY"),
+        mapbox_token=os.getenv("MAPBOX_TOKEN"),
         openweather_api_key=os.getenv("OPENWEATHER_API_KEY"),
+        unsplash_url=os.getenv("UNSPLASH_URL"),
+        unsplash_access_key=os.getenv("UNSPLASH_ACCESS_KEY"),
+        unsplash_secret_key=os.getenv("UNSPLASH_SECRET_KEY"),
+        cloudinary_cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+        cloudinary_api_key=os.getenv("CLOUDINARY_API_KEY"),
+        cloudinary_api_secret=os.getenv("CLOUDINARY_API_SECRET"),
         langsmith_api_key=os.getenv("LANGSMITH_API_KEY"),
         langsmith_project=os.getenv("LANGSMITH_PROJECT", "georgian-tourism-agents"),
         langchain_api_key=os.getenv("LANGCHAIN_API_KEY"),
