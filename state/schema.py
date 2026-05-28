@@ -1,27 +1,39 @@
-"""
-LangGraph state schema using TypedDict with annotated reducers.
+"""Runtime state for the LangGraph workflow.
 
-TypedDict is used because LangGraph nodes return partial updates and merge
-state through reducers.
+TravelPlanningState is a TypedDict — LangGraph requires it to resolve
+Annotated reducers at graph-compile time. Pydantic models live in
+state/contracts.py and are used for validation at the boundary.
 
 Reducer rules:
-- operator.add: append-only fields
-- add_messages: message merge with id-based deduplication
-- all other fields: last update wins
+- operator.add  : append-only (agent_history, errors, router_trace)
+- add_messages  : message merge with id-based deduplication
+- all other     : last-write wins
 """
 
+from __future__ import annotations
+
 import operator
-from typing import TypedDict, Annotated, Optional
-from datetime import datetime
-from langchain_core.messages import AnyMessage
+from datetime import datetime, timezone
+from typing import Annotated, Any, Optional, TypedDict
+
+from langchain_core.messages import AnyMessage, HumanMessage
 from langgraph.graph.message import add_messages
+
+from state.contracts import (
+    CanonicalTravelState,
+    MemorySnapshot,
+    QueryClassification,
+    TripParameters,
+    ValidationResult,
+    build_canonical_state,
+)
 
 
 class TravelPlanningState(TypedDict):
-    """
-    Main state for the LangGraph workflow.
+    """LangGraph runtime state.
 
-    Each node returns a dict with only the fields it updates.
+    Each node returns a partial dict; LangGraph merges it into this state
+    using the reducers declared via Annotated.
     """
 
     # ── Request metadata ─────────────────────────────────────────────────────
@@ -31,34 +43,44 @@ class TravelPlanningState(TypedDict):
     user_query: str
     user_language: str
 
-    # ── Orchestrator messages (not agent internals) ─────────────────────────
+    # ── LangGraph messages (dedup reducer) ───────────────────────────────────
     messages: Annotated[list[AnyMessage], add_messages]
 
-    # ── Orchestrator control ──────────────────────────────────────────────────
-    orchestrator_plan: Optional[dict]       # {steps: [{agent, params}], reasoning}
-    orchestrator_decision: Optional[str]    # next agent name
-    orchestrator_params: Optional[dict]     # next agent params
+    # ── Orchestrator control (legacy bridge, kept until graph migration) ─────
+    orchestrator_plan: Optional[dict]
+    orchestrator_decision: Optional[str]
+    orchestrator_params: Optional[dict]
     task_complete: bool
 
-    # ── Intent & Trip ─────────────────────────────────────────────────────────
-    intent: Optional[str]                   # "PLAN" | "SEARCH" | "INFORMATION"
+    # ── Intent and conversation stage ────────────────────────────────────────
+    # intent: legacy "PLAN" | "SEARCH" written by orchestrator_plan_node
+    # conversation_stage: new canonical "CONSULT"|"PLAN"|"REVISE"|"POST_REVIEW"|"INFO"
+    intent: Optional[str]
+    conversation_stage: Optional[str]
     query_type: Optional[str]
-    trip_parameters: Optional[dict]
 
-    # ── Agent outputs (overwrite semantics) ─────────────────────────────────
+    # ── Trip parameters and plan tracking ────────────────────────────────────
+    trip_parameters: Optional[dict]
+    has_current_plan: bool
+    current_plan_status: str
+    current_plan_version: int
+    current_plan: dict
+    feedback: str
+    follow_up_questions: list[str]
+
+    # ── Agent outputs (last-write wins) ──────────────────────────────────────
     search_results: Optional[list[dict]]
-    search_context: Optional[dict]          # {region, filters, center_location}
+    search_context: Optional[dict]
     weather_data: Optional[dict]
     enriched_places: Optional[list]
-    distance_matrix: Optional[dict]         # {"A→B": {"km": 25, "hours": 0.4}, ...}
+    distance_matrix: Optional[dict]
     raw_itinerary: Optional[dict]
     enriched_itinerary: Optional[dict]
     geocoded_locations: Optional[dict]
     validation_result: Optional[dict]
     final_response: Optional[str]
-
-    # ── Agent scratchpad (overwritten by each agent) ────────────────────────
     agent_scratchpad: Optional[dict]
+    orchestration: Optional[dict]
 
     # ── Memory ────────────────────────────────────────────────────────────────
     user_memory: Optional[dict]
@@ -67,25 +89,26 @@ class TravelPlanningState(TypedDict):
     memory_saved: bool
 
     # ── Execution control ─────────────────────────────────────────────────────
-    execution_mode: str                     # "normal" | "degraded" | "emergency"
+    execution_mode: str
     execution_start_time: Optional[datetime]
     feature_flags: dict
 
-    # ── Tracking — append-only through operator.add ─────────────────────────
-    # Nodes must return lists for these fields.
+    # ── Append-only fields — nodes MUST return lists for these ───────────────
     agent_history: Annotated[list[str], operator.add]
     errors: Annotated[list[str], operator.add]
     router_trace: Annotated[list[dict], operator.add]
 
-    # ── Budget tracking (overwrite) ─────────────────────────────────────────
+    # ── Budget tracking (last-write wins) ────────────────────────────────────
     budget_state: dict
 
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
 def _detect_language(text: str) -> str:
     """Infer language from Cyrillic, Georgian, and Latin character ratios."""
-    cyrillic = sum(1 for c in text if '\u0400' <= c <= '\u04FF')
-    georgian = sum(1 for c in text if '\u10D0' <= c <= '\u10FF')
-    latin    = sum(1 for c in text if 'a' <= c.lower() <= 'z')
+    cyrillic = sum(1 for c in text if "Ѐ" <= c <= "ӿ")
+    georgian = sum(1 for c in text if "ა" <= c <= "ჿ")
+    latin    = sum(1 for c in text if "a" <= c.lower() <= "z")
     total = cyrillic + georgian + latin
     if total == 0:
         return "en"
@@ -97,47 +120,55 @@ def _detect_language(text: str) -> str:
 
 
 def create_initial_state(
+    *,
     user_query: str,
     request_id: str,
     correlation_id: str,
     user_id: Optional[str] = None,
     user_language: Optional[str] = None,
-    trip_parameters: Optional[dict] = None,
 ) -> TravelPlanningState:
-    # Infer language from the query if it was not provided.
-    if not user_language:
-        user_language = _detect_language(user_query)
-    """
-    Create the initial state for a new request.
+    """Build the initial LangGraph state for a new request.
 
-    Optional fields start as None, list fields as [], and dict fields as {}.
+    Uses build_canonical_state as the authoritative factory and maps the
+    result into the TypedDict that LangGraph requires at runtime.
     """
-    from langchain_core.messages import HumanMessage
-    from datetime import timezone
+    language = user_language or _detect_language(user_query)
+
+    canonical = build_canonical_state(
+        request_id=request_id,
+        user_query=user_query,
+        user_language=language,
+        user_id=user_id,
+        correlation_id=correlation_id,
+    )
 
     return TravelPlanningState(
-        # Request
-        request_id=request_id,
-        correlation_id=correlation_id,
-        user_id=user_id,
-        user_query=user_query,
-        user_language=user_language,
-
-        # Start with the original user query.
+        # ── Request ────────────────────────────────────────────────────────
+        request_id=canonical.request_id,
+        correlation_id=canonical.correlation_id,
+        user_id=canonical.user_id,
+        user_query=canonical.user_query,
+        user_language=canonical.user_language,
+        # ── Messages ───────────────────────────────────────────────────────
         messages=[HumanMessage(content=user_query)],
-
-        # Orchestrator fields are filled during graph execution.
+        # ── Orchestrator (legacy bridge) ───────────────────────────────────
         orchestrator_plan=None,
         orchestrator_decision=None,
         orchestrator_params=None,
         task_complete=False,
-
-        # Intent
+        # ── Intent / stage ─────────────────────────────────────────────────
         intent=None,
+        conversation_stage=canonical.conversation_stage,
         query_type=None,
-        trip_parameters=trip_parameters,
-
-        # Agent outputs are empty until their nodes run.
+        # ── Trip ───────────────────────────────────────────────────────────
+        trip_parameters=canonical.trip_parameters.model_dump(),
+        has_current_plan=False,
+        current_plan_status="none",
+        current_plan_version=0,
+        current_plan={},
+        feedback="",
+        follow_up_questions=[],
+        # ── Agent outputs ──────────────────────────────────────────────────
         search_results=None,
         search_context=None,
         weather_data=None,
@@ -149,24 +180,21 @@ def create_initial_state(
         validation_result=None,
         final_response=None,
         agent_scratchpad=None,
-
-        # Memory
+        orchestration=None,
+        # ── Memory ─────────────────────────────────────────────────────────
         user_memory=None,
         relevant_episodes=[],
         eval_score=None,
         memory_saved=False,
-
-        # Execution
+        # ── Execution ──────────────────────────────────────────────────────
         execution_mode="normal",
         execution_start_time=datetime.now(timezone.utc),
         feature_flags={},
-
-        # Tracking fields are append-only through reducers.
+        # ── Append-only (reducer lists — always start empty) ───────────────
         agent_history=[],
         errors=[],
         router_trace=[],
-
-        # Budget
+        # ── Budget ─────────────────────────────────────────────────────────
         budget_state={
             "llm_calls": 0,
             "tool_calls": 0,
@@ -175,3 +203,27 @@ def create_initial_state(
             "estimated_cost_usd": 0.0,
         },
     )
+
+
+def to_canonical_state(state: dict[str, Any]) -> CanonicalTravelState:
+    """Convert a runtime dict into the canonical Pydantic model for validation.
+
+    None values are dropped so Pydantic uses its own field defaults for
+    fields that have not been populated yet (e.g. search_results=None
+    at graph start becomes [] in the canonical model).
+    """
+    clean = {k: v for k, v in state.items() if v is not None}
+    return CanonicalTravelState.model_validate(clean)
+
+
+__all__ = [
+    "CanonicalTravelState",
+    "MemorySnapshot",
+    "QueryClassification",
+    "TravelPlanningState",
+    "TripParameters",
+    "ValidationResult",
+    "build_canonical_state",
+    "create_initial_state",
+    "to_canonical_state",
+]
