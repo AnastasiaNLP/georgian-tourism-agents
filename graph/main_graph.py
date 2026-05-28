@@ -1,4 +1,3 @@
-# graph/main_graph.py
 """Main deterministic LangGraph pipeline."""
 
 from __future__ import annotations
@@ -7,24 +6,18 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
-from state.schema import TravelPlanningState
-from orchestrator.orchestrator import OrchestratorAgent
-from orchestrator.execution_guard import ExecutionGuard
 from agents.registry import get_registry
+from orchestrator.execution_guard import ExecutionGuard
+from orchestrator.orchestrator import OrchestratorAgent
+from state.schema import TravelPlanningState
 
-# Singletons are created lazily and reused.
-# Keep the orchestrator lazy so importing this module does not create an LLM client.
 _orchestrator: Optional[OrchestratorAgent] = None
 _guard = ExecutionGuard()
 
 logger = logging.getLogger(__name__)
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# Utility
-# ════════════════════════════════════════════════════════════════════════════
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -60,11 +53,6 @@ def _params_from_step(step) -> dict:
     return (step.get("params") if isinstance(step, dict) else step.params) or {}
 
 
-def _determine_intent(steps: list) -> str:
-    agents = {_agent_from_step(step) for step in steps}
-    return "PLAN" if "planning_agent" in agents else "SEARCH"
-
-
 def _merged_orchestrator_params(steps: list) -> dict:
     merged = {}
     for step in steps:
@@ -74,14 +62,7 @@ def _merged_orchestrator_params(steps: list) -> dict:
     return merged
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# Node: memory_load
-# ════════════════════════════════════════════════════════════════════════════
-
 async def memory_load_node(state: TravelPlanningState) -> dict:
-    """
-    Initialize request state and load user memory.
-    """
     request_id = state.get("request_id", "unknown")
     user_id = state.get("user_id")
     logger.info(f"[{request_id}] memory_load: initializing, user_id={user_id}")
@@ -103,12 +84,13 @@ async def memory_load_node(state: TravelPlanningState) -> dict:
     if user_id:
         try:
             from src.memory.memory_manager import get_memory_manager
+
             mm = get_memory_manager()
             profile = mm.load_profile(user_id)
             result["user_memory"] = profile
             logger.info(f"[{request_id}] memory_load: profile loaded for {user_id}")
-        except Exception as e:
-            logger.warning(f"[{request_id}] memory_load: failed to load profile: {e}")
+        except Exception as exc:
+            logger.warning(f"[{request_id}] memory_load: failed to load profile: {exc}")
             result["user_memory"] = None
     else:
         result["user_memory"] = None
@@ -132,15 +114,7 @@ def _load_feature_flags() -> dict:
     }
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# Node: orchestrator_plan
-# ════════════════════════════════════════════════════════════════════════════
-
 async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
-    """
-    Classifier step.
-    Claude extracts intent and parameters once; graph routing is deterministic.
-    """
     request_id = state.get("request_id", "unknown")
 
     guard_result = _guard.check_before_plan(state)
@@ -150,7 +124,8 @@ async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
             "orchestrator_plan": {"steps": [], "reasoning": guard_result.reason, "estimated_agents": 0},
             "orchestrator_decision": "response_agent",
             "orchestrator_params": {},
-            "intent": "SEARCH",
+            "intent": "INFO",
+            "conversation_stage": "INFO",
             "execution_mode": "degraded",
             "errors": [f"guard: {guard_result.reason}"],
             "router_trace": [{
@@ -164,12 +139,23 @@ async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
     from monitoring.token_tracker import TokenTracker, merge_budget
 
     tracker = TokenTracker(model="claude-haiku-4-5-20251001")
-    plan = await _get_orchestrator().classify(state, callbacks=[tracker])
-    plan_dict = _plan_to_dict(plan)
+    classification = await _get_orchestrator().classify(state, callbacks=[tracker])
+    plan_dict = _plan_to_dict(classification)
     steps = plan_dict.get("steps") or []
-    intent = _determine_intent(steps)
-    params = _merged_orchestrator_params(steps)
-    next_agent = "search_agent"
+    intent = classification.intent if hasattr(classification, "intent") else plan_dict.get("intent", "INFO")
+    params = {
+        "region": getattr(classification, "region", ""),
+        "search_query": getattr(classification, "search_query", state.get("user_query", "")),
+        "days": getattr(classification, "days", None),
+        "pace": getattr(classification, "pace", "moderate"),
+    }
+    next_agent = {
+        "PLAN": "search_agent",
+        "INFO": "search_agent",
+        "SEARCH": "search_agent",
+        "CONSULT": "consultation_agent",
+        "REVISE": "revision_agent",
+    }.get(intent, "search_agent")
 
     logger.info(
         f"[{request_id}] classifier: intent={intent}, "
@@ -181,10 +167,15 @@ async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
         "orchestrator_decision": next_agent,
         "orchestrator_params": params,
         "intent": intent,
+        "conversation_stage": getattr(classification, "conversation_stage", intent),
         "trip_parameters": {
             "days": params.get("days"),
             "pace": params.get("pace", "moderate"),
-        } if intent == "PLAN" else state.get("trip_parameters"),
+            "region": params.get("region", ""),
+            "search_query": params.get("search_query", ""),
+            "consent_to_plan": intent == "PLAN",
+        },
+        "orchestration": classification.model_dump() if hasattr(classification, "model_dump") else plan_dict,
         "budget_state": merge_budget(state.get("budget_state") or {}, tracker),
         "router_trace": [{
             "from": "classifier",
@@ -194,35 +185,71 @@ async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
         }],
     }
 
+
 def route_from_orchestrator(state: TravelPlanningState) -> str:
-    """Conditional edge after classifier."""
     if state.get("task_complete"):
         return "__end__"
+
+    stage = state.get("conversation_stage")
+    if stage == "CONSULT":
+        return "consultation_agent"
+    if stage == "REVISE":
+        return "revision_agent"
+    if stage in {"PLAN", "INFO"}:
+        return "search_agent"
+
+    orchestration = state.get("orchestration") or {}
+    intent = orchestration.get("intent") if isinstance(orchestration, dict) else getattr(orchestration, "intent", None)
+    if intent is None:
+        intent = state.get("intent")
+    if intent == "CONSULT":
+        return "consultation_agent"
+    if intent == "REVISE":
+        return "revision_agent"
+    if intent in {"PLAN", "INFO", "SEARCH"}:
+        return "search_agent"
     return _normalize_agent_decision(state.get("orchestrator_decision", "search_agent"))
 
 
+def route_after_consultation(state: TravelPlanningState) -> str:
+    if state.get("task_complete"):
+        return "memory_save"
+    orchestration = state.get("orchestration") or {}
+    intent = orchestration.get("intent") if isinstance(orchestration, dict) else getattr(orchestration, "intent", None)
+    if intent is None:
+        intent = state.get("intent")
+    if intent == "PLAN":
+        return "search_agent"
+    return "response_agent"
+
+
 def route_after_search(state: TravelPlanningState) -> str:
-    """SEARCH intent returns directly; PLAN intent continues full pipeline."""
-    return "geo_agent" if state.get("intent") == "PLAN" else "response_agent"
+    orchestration = state.get("orchestration") or {}
+    intent = orchestration.get("intent") if isinstance(orchestration, dict) else getattr(orchestration, "intent", None)
+    if intent is None:
+        intent = state.get("intent")
+    return "geo_agent" if intent == "PLAN" else "response_agent"
 
 
 def route_after_planning(state: TravelPlanningState) -> str:
-    """Validation can be disabled by feature flag."""
     flags = state.get("feature_flags") or {}
     return "validation_agent" if flags.get("ENABLE_VALIDATION", True) else "response_agent"
 
 
 def _normalize_agent_decision(decision: Optional[str]) -> str:
-    allowed = {"search_agent", "planning_agent", "geo_agent",
-               "validation_agent", "response_agent"}
+    allowed = {
+        "search_agent",
+        "planning_agent",
+        "geo_agent",
+        "validation_agent",
+        "response_agent",
+        "consultation_agent",
+        "revision_agent",
+    }
     if decision not in allowed:
         return "response_agent"
     return decision
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# Node: eval_node
-# ════════════════════════════════════════════════════════════════════════════
 
 async def eval_node(state: TravelPlanningState) -> dict:
     """LLM-as-judge eval enabled through FEATURE_ENABLE_EVAL=true."""
@@ -238,10 +265,7 @@ async def eval_node(state: TravelPlanningState) -> dict:
 
     try:
         days = itinerary.get("days", [])
-        total_km = sum(
-            d.get("total_distance_km", 0) for d in days
-            if isinstance(d, dict)
-        )
+        total_km = sum(d.get("total_distance_km", 0) for d in days if isinstance(d, dict))
         pace = (state.get("trip_parameters") or {}).get("pace", "moderate")
 
         prompt = (
@@ -256,40 +280,30 @@ async def eval_node(state: TravelPlanningState) -> dict:
         )
 
         from langchain_openai import ChatOpenAI
+
         llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, max_tokens=200)
         response = await llm.ainvoke(prompt)
         raw = response.content.strip()
 
         import json
+
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
         parsed = json.loads(raw.strip())
 
-        total = round(
-            (parsed.get("realism", 0) +
-             parsed.get("distance", 0) +
-             parsed.get("feasibility", 0)) / 3, 3
-        )
+        total = round((parsed.get("realism", 0) + parsed.get("distance", 0) + parsed.get("feasibility", 0)) / 3, 3)
         parsed["total"] = total
 
         logger.info(f"[{request_id}] eval_node: score={total:.2f} comment={parsed.get('comment', '')[:50]}")
         return {"eval_score": parsed}
+    except Exception as exc:
+        logger.warning(f"[{request_id}] eval_node: failed: {exc}")
+        return {"eval_score": {"total": 0.0, "comment": f"eval_failed: {exc}"}}
 
-    except Exception as e:
-        logger.warning(f"[{request_id}] eval_node: failed: {e}")
-        return {"eval_score": {"total": 0.0, "comment": f"eval_failed: {e}"}}
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# Node: memory_save
-# ════════════════════════════════════════════════════════════════════════════
 
 async def memory_save_node(state: TravelPlanningState) -> dict:
-    """
-    Save profile to Redis and trip episode to Qdrant when applicable.
-    """
     request_id = state.get("request_id", "unknown")
     user_id = state.get("user_id")
 
@@ -299,15 +313,13 @@ async def memory_save_node(state: TravelPlanningState) -> dict:
 
     try:
         from src.memory.memory_manager import get_memory_manager
-        mm = get_memory_manager()
 
-        # Profile writes are cheap, so they are always attempted.
+        mm = get_memory_manager()
         profile_data = mm.extract_profile_update(state)
         if profile_data:
             mm.save_profile(user_id, profile_data)
             logger.info(f"[{request_id}] memory_save: profile saved for {user_id}")
 
-        # Episode writes are stored only for successful planning flows.
         mode = state.get("execution_mode", "normal")
         history = state.get("agent_history", [])
         has_itinerary = state.get("enriched_itinerary") or state.get("raw_itinerary")
@@ -321,78 +333,71 @@ async def memory_save_node(state: TravelPlanningState) -> dict:
                 f"[{request_id}] memory_save: skip episode "
                 f"(mode={mode}, planning={'planning_agent' in history}, itinerary={bool(has_itinerary)})"
             )
-
         return {"memory_saved": True}
-
-    except Exception as e:
-        logger.error(f"[{request_id}] memory_save: failed: {e}")
+    except Exception as exc:
+        logger.error(f"[{request_id}] memory_save: failed: {exc}")
         return {"memory_saved": False}
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# Build Graph
-# ════════════════════════════════════════════════════════════════════════════
-
 def build_graph(checkpointer=None):
-    """
-    Build and compile the LangGraph workflow.
-
-    Agent nodes are loaded from AgentRegistry.
-    """
     wf = StateGraph(TravelPlanningState)
-
-    # ── Nodes ────────────────────────────────────────────────────────────────
-    wf.add_node("memory_load",          memory_load_node)
-    wf.add_node("orchestrator_plan",    orchestrator_plan_node)
-    # Load real agent nodes from the registry.
     registry = get_registry()
     registry.initialize()
 
-    wf.add_node("search_agent",     registry.get("search_agent"))
-    wf.add_node("planning_agent",   registry.get("planning_agent"))
-    wf.add_node("geo_agent",        registry.get("geo_agent"))
+    wf.add_node("memory_load", memory_load_node)
+    wf.add_node("orchestrator_plan", orchestrator_plan_node)
+    wf.add_node("search_agent", registry.get("search_agent"))
+    wf.add_node("geo_agent", registry.get("geo_agent"))
+    wf.add_node("planning_agent", registry.get("planning_agent"))
     wf.add_node("validation_agent", registry.get("validation_agent"))
-    wf.add_node("response_agent",   registry.get("response_agent"))
-    wf.add_node("eval_node",            eval_node)
-    wf.add_node("memory_save",          memory_save_node)
+    wf.add_node("response_agent", registry.get("response_agent"))
+    wf.add_node("consultation_agent", registry.get("consultation_agent"))
+    wf.add_node("revision_agent", registry.get("revision_agent"))
+    wf.add_node("eval_node", eval_node)
+    wf.add_node("memory_save", memory_save_node)
 
-    # ── Entry point ───────────────────────────────────────────────────────────
     wf.set_entry_point("memory_load")
-
-    # ── Fixed edges ─────────────────────────────────────────────────────────
     wf.add_edge("memory_load", "orchestrator_plan")
 
-    # ── Deterministic pipeline ────────────────────────────────────────────────
-    wf.add_edge("geo_agent",        "planning_agent")
+    wf.add_edge("geo_agent", "planning_agent")
     wf.add_edge("validation_agent", "response_agent")
+    wf.add_edge("revision_agent", "validation_agent")
+    wf.add_edge("response_agent", "eval_node")
+    wf.add_edge("eval_node", "memory_save")
+    wf.add_edge("memory_save", END)
 
-    # ── Final edges ─────────────────────────────────────────────────────────
-    wf.add_edge("response_agent",   "eval_node")
-    wf.add_edge("eval_node",        "memory_save")
-    wf.add_edge("memory_save",      END)
-
-    # ── Classifier → first deterministic step ────────────────────────────────
     wf.add_conditional_edges(
         "orchestrator_plan",
         route_from_orchestrator,
         {
-            "search_agent":     "search_agent",
-            "planning_agent":   "planning_agent",
-            "geo_agent":        "geo_agent",
+            "search_agent": "search_agent",
+            "planning_agent": "planning_agent",
+            "geo_agent": "geo_agent",
             "validation_agent": "validation_agent",
-            "response_agent":   "response_agent",
-            "__end__":          END,
-        }
+            "response_agent": "response_agent",
+            "consultation_agent": "consultation_agent",
+            "revision_agent": "revision_agent",
+            "__end__": END,
+        },
     )
 
-    # ── Intent-dependent deterministic branches ──────────────────────────────
+    wf.add_conditional_edges(
+        "consultation_agent",
+        route_after_consultation,
+        {
+            "search_agent": "search_agent",
+            "response_agent": "response_agent",
+            "memory_save": "memory_save",
+        },
+    )
+
     wf.add_conditional_edges(
         "search_agent",
         route_after_search,
         {
             "geo_agent": "geo_agent",
             "response_agent": "response_agent",
-        }
+        },
     )
 
     wf.add_conditional_edges(
@@ -401,44 +406,34 @@ def build_graph(checkpointer=None):
         {
             "validation_agent": "validation_agent",
             "response_agent": "response_agent",
-        }
+        },
     )
 
     return wf.compile(checkpointer=checkpointer)
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# Run helper for tests and scripts.
-# ════════════════════════════════════════════════════════════════════════════
-
 _cached_graph = None
+
 
 async def run_graph(
     user_query: str,
     request_id: str,
     user_id: Optional[str] = None,
     user_language: Optional[str] = None,
-) -> dict:
-    """
-    Run the graph for a single query.
+    correlation_id: Optional[str] = None,
+):
+    from state.schema import create_initial_state
 
-    The graph is compiled once and cached.
-    """
     global _cached_graph
     if _cached_graph is None:
         _cached_graph = build_graph()
-        logger.info("run_graph: graph compiled and cached")
-
-    from state.schema import create_initial_state
-    import uuid
-
     state = create_initial_state(
         user_query=user_query,
         request_id=request_id,
-        correlation_id=str(uuid.uuid4()),
-        user_id=user_id,
-        user_language=user_language,
+        correlation_id=correlation_id or request_id,
+        user_id=user_id or "",
+        user_language=user_language or "en",
     )
-
     config = {"configurable": {"thread_id": request_id}}
     return await _cached_graph.ainvoke(state, config=config)
+

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import operator
-from typing import Any, Annotated, Optional, TypedDict
+from typing import Any, Annotated, Optional, TypedDict, Union
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
@@ -32,15 +32,15 @@ class TravelPlanningState(TypedDict, total=False):
     feedback: str
     follow_up_questions: list[str]
 
-    trip_parameters: TripParameters | dict[str, Any]
-    user_memory: MemorySnapshot | dict[str, Any]
+    trip_parameters: Union[TripParameters, dict[str, Any]]
+    user_memory: Union[MemorySnapshot, dict[str, Any]]
 
     search_results: list[dict[str, Any]]
     enriched_places: list[dict[str, Any]]
     distance_matrix: dict[str, dict[str, Any]]
     raw_itinerary: dict[str, Any]
     enriched_itinerary: dict[str, Any]
-    validation_result: ValidationResult | dict[str, Any]
+    validation_result: Union[ValidationResult, dict[str, Any]]
     final_response: str
 
     feature_flags: dict[str, bool]
@@ -51,7 +51,7 @@ class TravelPlanningState(TypedDict, total=False):
     errors: Annotated[list[str], operator.add]
     messages: Annotated[list[AnyMessage], add_messages]
 
-    orchestration: QueryClassification | dict[str, Any] | None
+    orchestration: Optional[Union[QueryClassification, dict[str, Any]]]
     orchestrator_plan: dict[str, Any]
     orchestrator_decision: str
     orchestrator_params: dict[str, Any]

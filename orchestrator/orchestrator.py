@@ -33,7 +33,6 @@ class OrchestratorAgent:
         logger.info("OrchestratorAgent classifier initialized (Claude Haiku)")
 
     async def classify(self, state: dict, callbacks: list = None) -> QueryClassification:
-        """Extract intent and parameters for deterministic routing."""
         context = self._build_plan_context(state)
         invoke_config = {"callbacks": callbacks} if callbacks else {}
 
@@ -48,7 +47,7 @@ class OrchestratorAgent:
             )
             logger.info(
                 f"[{state.get('request_id')}] classifier: intent={classification.intent} "
-                f"region={classification.region} days={classification.days} pace={classification.pace}"
+                f"stage={classification.conversation_stage} region={classification.region}"
             )
             return self._attach_legacy_steps(classification, state)
         except Exception as exc:
@@ -56,7 +55,6 @@ class OrchestratorAgent:
             return self._fallback_classification(state)
 
     def _fallback_classification(self, state: dict) -> QueryClassification:
-        """Derive a safe classifier output from fallback plan heuristics."""
         plan = enforce_plan_rules(create_fallback_plan(state), state)
         return self._attach_legacy_steps(self._plan_to_classification(plan, state), state)
 
@@ -65,9 +63,6 @@ class OrchestratorAgent:
         classification: QueryClassification,
         state: dict,
     ) -> QueryClassification:
-        """
-        Attach legacy step payloads so the current graph can keep working.
-        """
         if classification.steps:
             return classification
 
@@ -84,8 +79,14 @@ class OrchestratorAgent:
             ]
         elif intent == "REVISE" and has_current_plan:
             steps = [
-                {"agent": "search_agent", "params": {"region": classification.region, "search_query": classification.search_query}, "reason": "classifier: plan revision support"},
-                {"agent": "response_agent", "params": {}, "reason": "classifier: discuss revision"},
+                {"agent": "revision_agent", "params": {"feedback": state.get("feedback", "")}, "reason": "classifier: revise existing plan"},
+                {"agent": "validation_agent", "params": {"pace": classification.pace}, "reason": "classifier: validate revised itinerary"},
+                {"agent": "response_agent", "params": {}, "reason": "classifier: format final response"},
+            ]
+        elif intent == "CONSULT":
+            steps = [
+                {"agent": "consultation_agent", "params": {"region": classification.region, "search_query": classification.search_query}, "reason": "classifier: gather missing details"},
+                {"agent": "response_agent", "params": {}, "reason": "classifier: answer consultation"},
             ]
         else:
             steps = [
@@ -127,6 +128,15 @@ class OrchestratorAgent:
         else:
             intent = "CONSULT"
 
+        if intent == "PLAN":
+            stage = "PLAN"
+        elif intent == "REVISE":
+            stage = "REVISE"
+        elif intent == "CONSULT":
+            stage = "CONSULT"
+        else:
+            stage = "INFO"
+
         return QueryClassification(
             intent=intent,
             region=str(params.get("region", "")),
@@ -134,6 +144,7 @@ class OrchestratorAgent:
             days=params.get("days"),
             pace=params.get("pace", "moderate"),
             should_ask_clarification=bool(params.get("should_ask_clarification", False)),
+            conversation_stage=stage,
             reasoning=str(getattr(plan, "reasoning", "") or ""),
             estimated_agents=int(getattr(plan, "estimated_agents", len(steps) or 0) or 0),
             steps=[

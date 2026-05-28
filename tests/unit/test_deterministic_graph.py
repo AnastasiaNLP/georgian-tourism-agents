@@ -27,8 +27,8 @@ def test_graph_compiles():
     assert type(graph).__name__ == "CompiledStateGraph"
 
 
-def test_classifier_params_are_merged_from_steps():
-    from graph.main_graph import _determine_intent, _merged_orchestrator_params
+def test_orchestrator_params_are_merged_from_steps():
+    from graph.main_graph import _merged_orchestrator_params
 
     steps = [
         {
@@ -45,7 +45,6 @@ def test_classifier_params_are_merged_from_steps():
         },
     ]
 
-    assert _determine_intent(steps) == "PLAN"
     assert _merged_orchestrator_params(steps) == {
         "region": "Kakheti",
         "search_query": "wine vineyard monastery",
