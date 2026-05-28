@@ -1,13 +1,6 @@
-"""Pydantic contracts for the canonical travel-assistant state.
-
-These models define the public structure of the graph state and the
-classifier output. The graph can still serialize to dict at runtime, but
-the contract itself stays typed and explicit.
-"""
-
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -15,134 +8,151 @@ from pydantic import BaseModel, Field
 ConversationStage = Literal["CONSULT", "PLAN", "REVISE", "POST_REVIEW", "INFO"]
 ClassifierIntent = Literal["CONSULT", "PLAN", "REVISE", "INFO"]
 TravelPace = Literal["relaxed", "moderate", "intensive"]
+RecommendedAction = Literal["proceed", "retry", "degrade", "abort"]
 
 
 class QueryClassification(BaseModel):
-    """Output produced by the classifier before deterministic routing."""
-
-    intent: ClassifierIntent = Field(description="High-level routing intent")
-    region: str = Field(default="", description="Detected Georgian region")
-    search_query: str = Field(default="", description="Normalized search query")
-    days: Optional[int] = Field(default=None, ge=1, le=30)
-    pace: TravelPace = Field(default="moderate")
-    should_ask_clarification: bool = Field(
-        default=False,
-        description="True when the system should ask for more details before planning",
-    )
-    steps: list[dict] = Field(default_factory=list)
+    intent: ClassifierIntent = "INFO"
+    region: str = ""
+    search_query: str = ""
+    days: Optional[int] = None
+    pace: TravelPace = "moderate"
+    should_ask_clarification: bool = False
+    conversation_stage: ConversationStage = "CONSULT"
+    steps: list[dict[str, Any]] = Field(default_factory=list)
     reasoning: str = ""
     estimated_agents: int = 0
 
 
 class TripParameters(BaseModel):
-    """Normalized trip parameters shared across planning stages."""
-
     region: str = ""
-    days: Optional[int] = Field(default=None, ge=1, le=30)
+    days: Optional[int] = None
     pace: TravelPace = "moderate"
+    interests: list[str] = Field(default_factory=list)
+    budget_level: str = ""
+    transport_mode: str = ""
     search_query: str = ""
-    consent_to_plan: bool = False
 
 
 class MemorySnapshot(BaseModel):
-    """User memory visible to the classifier and planning stages."""
-
+    user_id: str = ""
+    preferences: list[str] = Field(default_factory=list)
     visited_places: list[str] = Field(default_factory=list)
-    interests: list[str] = Field(default_factory=list)
-    preferred_language: str = "en"
-    disliked_places: list[str] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list)
+    last_language: str = ""
+    episode_summaries: list[str] = Field(default_factory=list)
 
 
 class ValidationResult(BaseModel):
-    """Structured validation result for itinerary checks."""
-
-    is_valid: bool = True
-    score: float = 1.0
-    warnings: list[str] = Field(default_factory=list)
+    is_valid: bool = False
+    score: float = 0.0
     errors: list[str] = Field(default_factory=list)
-    recommended_action: Literal["proceed", "retry", "degrade", "abort"] = "proceed"
+    warnings: list[str] = Field(default_factory=list)
+    recommended_action: RecommendedAction = "proceed"
+
+
+class Coordinates(BaseModel):
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+
+class Activity(BaseModel):
+    name: str
+    location: str = ""
+    category: str = ""
+    coordinates: Coordinates = Field(default_factory=Coordinates)
+    description: str = ""
+
+
+class ItineraryDay(BaseModel):
+    day: int
+    location: str = ""
+    activities: list[Activity] = Field(default_factory=list)
+    total_distance_km: float = 0.0
+    total_driving_hours: float = 0.0
+
+
+class Itinerary(BaseModel):
+    days: list[ItineraryDay] = Field(default_factory=list)
+    total_days: int = 0
+    pace: TravelPace = "moderate"
+    summary: str = ""
 
 
 class CanonicalTravelState(BaseModel):
-    """Canonical graph state shared by the parent graph and subgraphs."""
-
-    request_id: str
-    user_query: str
+    request_id: str = ""
+    user_query: str = ""
     user_language: str = "en"
-    user_id: Optional[str] = None
-    correlation_id: Optional[str] = None
+    user_id: str = ""
+    correlation_id: str = ""
 
-    # Routing and dialogue control
-    intent: Optional[ClassifierIntent] = None
-    conversation_stage: Optional[ConversationStage] = None
+    intent: ClassifierIntent = "INFO"
+    conversation_stage: ConversationStage = "CONSULT"
     has_current_plan: bool = False
-    current_plan_status: str = "none"
+    current_plan_status: str = ""
     current_plan_version: int = 0
-    current_plan: dict = Field(default_factory=dict)
+    current_plan: dict[str, Any] = Field(default_factory=dict)
     feedback: str = ""
     follow_up_questions: list[str] = Field(default_factory=list)
 
-    # Inputs and memory
     trip_parameters: TripParameters = Field(default_factory=TripParameters)
-    user_memory: Optional[MemorySnapshot] = None
+    user_memory: MemorySnapshot = Field(default_factory=MemorySnapshot)
 
-    # Working data produced by agents
-    search_results: list[dict] = Field(default_factory=list)
-    enriched_places: list[dict] = Field(default_factory=list)
-    distance_matrix: dict = Field(default_factory=dict)
-    raw_itinerary: dict = Field(default_factory=dict)
-    enriched_itinerary: dict = Field(default_factory=dict)
-    validation_result: Optional[ValidationResult] = None
+    search_results: list[dict[str, Any]] = Field(default_factory=list)
+    enriched_places: list[dict[str, Any]] = Field(default_factory=list)
+    distance_matrix: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    raw_itinerary: dict[str, Any] = Field(default_factory=dict)
+    enriched_itinerary: dict[str, Any] = Field(default_factory=dict)
+    validation_result: ValidationResult = Field(default_factory=ValidationResult)
     final_response: str = ""
 
-    # Control and observability
-    feature_flags: dict = Field(default_factory=dict)
-    budget_state: dict = Field(default_factory=dict)
+    feature_flags: dict[str, bool] = Field(default_factory=dict)
+    budget_state: dict[str, Any] = Field(default_factory=dict)
     agent_history: list[str] = Field(default_factory=list)
-    agent_scratchpad: dict = Field(default_factory=dict)
-    router_trace: list[dict] = Field(default_factory=list)
+    agent_scratchpad: dict[str, Any] = Field(default_factory=dict)
+    router_trace: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
-    orchestration: Optional[QueryClassification] = None
+    orchestration: Optional[Union[QueryClassification, dict[str, Any]]] = None
+    task_complete: bool = False
 
 
 def build_canonical_state(
     *,
-    request_id: str,
     user_query: str,
+    request_id: str,
+    correlation_id: str,
+    user_id: str = "",
     user_language: str = "en",
-    user_id: Optional[str] = None,
-    correlation_id: Optional[str] = None,
 ) -> CanonicalTravelState:
-    """Create the canonical initial graph state."""
-
     return CanonicalTravelState(
         request_id=request_id,
         user_query=user_query,
-        user_language=user_language,
+        user_language=user_language or "en",
         user_id=user_id,
-        correlation_id=correlation_id or request_id,
+        correlation_id=correlation_id,
+        intent="INFO",
         conversation_stage="CONSULT",
-        user_memory=None,
+        has_current_plan=False,
+        current_plan_status="",
+        current_plan_version=0,
+        current_plan={},
+        feedback="",
+        follow_up_questions=[],
         trip_parameters=TripParameters(),
+        user_memory=MemorySnapshot(user_id=user_id),
+        search_results=[],
+        enriched_places=[],
+        distance_matrix={},
+        raw_itinerary={},
+        enriched_itinerary={},
+        validation_result=ValidationResult(),
+        final_response="",
         feature_flags={},
         budget_state={},
         agent_history=[],
         agent_scratchpad={},
         router_trace=[],
         errors=[],
-        current_plan={},
-        raw_itinerary={},
-        enriched_itinerary={},
-        search_results=[],
-        enriched_places=[],
-        distance_matrix={},
-        follow_up_questions=[],
-        final_response="",
-        has_current_plan=False,
-        current_plan_status="none",
-        current_plan_version=0,
-        feedback="",
         orchestration=None,
+        task_complete=False,
     )
 

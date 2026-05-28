@@ -1,22 +1,9 @@
-"""Runtime state for the LangGraph workflow.
-
-TravelPlanningState is a TypedDict — LangGraph requires it to resolve
-Annotated reducers at graph-compile time. Pydantic models live in
-state/contracts.py and are used for validation at the boundary.
-
-Reducer rules:
-- operator.add  : append-only (agent_history, errors, router_trace)
-- add_messages  : message merge with id-based deduplication
-- all other     : last-write wins
-"""
-
 from __future__ import annotations
 
 import operator
-from datetime import datetime, timezone
-from typing import Annotated, Any, Optional, TypedDict
+from typing import Any, Annotated, Optional, TypedDict
 
-from langchain_core.messages import AnyMessage, HumanMessage
+from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
 from state.contracts import (
@@ -29,201 +16,125 @@ from state.contracts import (
 )
 
 
-class TravelPlanningState(TypedDict):
-    """LangGraph runtime state.
-
-    Each node returns a partial dict; LangGraph merges it into this state
-    using the reducers declared via Annotated.
-    """
-
-    # ── Request metadata ─────────────────────────────────────────────────────
+class TravelPlanningState(TypedDict, total=False):
     request_id: str
-    correlation_id: str
-    user_id: Optional[str]
     user_query: str
     user_language: str
+    user_id: str
+    correlation_id: str
 
-    # ── LangGraph messages (dedup reducer) ───────────────────────────────────
-    messages: Annotated[list[AnyMessage], add_messages]
-
-    # ── Orchestrator control (legacy bridge, kept until graph migration) ─────
-    orchestrator_plan: Optional[dict]
-    orchestrator_decision: Optional[str]
-    orchestrator_params: Optional[dict]
-    task_complete: bool
-
-    # ── Intent and conversation stage ────────────────────────────────────────
-    # intent: legacy "PLAN" | "SEARCH" written by orchestrator_plan_node
-    # conversation_stage: new canonical "CONSULT"|"PLAN"|"REVISE"|"POST_REVIEW"|"INFO"
-    intent: Optional[str]
-    conversation_stage: Optional[str]
-    query_type: Optional[str]
-
-    # ── Trip parameters and plan tracking ────────────────────────────────────
-    trip_parameters: Optional[dict]
+    intent: str
+    conversation_stage: str
     has_current_plan: bool
     current_plan_status: str
     current_plan_version: int
-    current_plan: dict
+    current_plan: dict[str, Any]
     feedback: str
     follow_up_questions: list[str]
 
-    # ── Agent outputs (last-write wins) ──────────────────────────────────────
-    search_results: Optional[list[dict]]
-    search_context: Optional[dict]
-    weather_data: Optional[dict]
-    enriched_places: Optional[list]
-    distance_matrix: Optional[dict]
-    raw_itinerary: Optional[dict]
-    enriched_itinerary: Optional[dict]
-    geocoded_locations: Optional[dict]
-    validation_result: Optional[dict]
-    final_response: Optional[str]
-    agent_scratchpad: Optional[dict]
-    orchestration: Optional[dict]
+    trip_parameters: TripParameters | dict[str, Any]
+    user_memory: MemorySnapshot | dict[str, Any]
 
-    # ── Memory ────────────────────────────────────────────────────────────────
-    user_memory: Optional[dict]
-    relevant_episodes: list[dict]
-    eval_score: Optional[dict]
-    memory_saved: bool
+    search_results: list[dict[str, Any]]
+    enriched_places: list[dict[str, Any]]
+    distance_matrix: dict[str, dict[str, Any]]
+    raw_itinerary: dict[str, Any]
+    enriched_itinerary: dict[str, Any]
+    validation_result: ValidationResult | dict[str, Any]
+    final_response: str
 
-    # ── Execution control ─────────────────────────────────────────────────────
-    execution_mode: str
-    execution_start_time: Optional[datetime]
-    feature_flags: dict
-
-    # ── Append-only fields — nodes MUST return lists for these ───────────────
+    feature_flags: dict[str, bool]
+    budget_state: dict[str, Any]
     agent_history: Annotated[list[str], operator.add]
+    agent_scratchpad: dict[str, Any]
+    router_trace: Annotated[list[dict[str, Any]], operator.add]
     errors: Annotated[list[str], operator.add]
-    router_trace: Annotated[list[dict], operator.add]
+    messages: Annotated[list[AnyMessage], add_messages]
 
-    # ── Budget tracking (last-write wins) ────────────────────────────────────
-    budget_state: dict
+    orchestration: QueryClassification | dict[str, Any] | None
+    orchestrator_plan: dict[str, Any]
+    orchestrator_decision: str
+    orchestrator_params: dict[str, Any]
+
+    execution_start_time: float
+    execution_mode: str
+    memory_saved: bool
+    eval_score: float
+    task_complete: bool
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-def _detect_language(text: str) -> str:
-    """Infer language from Cyrillic, Georgian, and Latin character ratios."""
-    cyrillic = sum(1 for c in text if "Ѐ" <= c <= "ӿ")
-    georgian = sum(1 for c in text if "ა" <= c <= "ჿ")
-    latin    = sum(1 for c in text if "a" <= c.lower() <= "z")
-    total = cyrillic + georgian + latin
-    if total == 0:
-        return "en"
-    if cyrillic / total > 0.3:
-        return "ru"
-    if georgian / total > 0.3:
-        return "ka"
-    return "en"
+def _strip_none(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _strip_none(inner) for key, inner in value.items() if inner is not None}
+    if isinstance(value, list):
+        return [_strip_none(item) for item in value if item is not None]
+    return value
 
 
 def create_initial_state(
-    *,
     user_query: str,
     request_id: str,
-    correlation_id: str,
-    user_id: Optional[str] = None,
-    user_language: Optional[str] = None,
+    *,
+    correlation_id: Optional[str] = None,
+    user_id: str = "",
+    user_language: str = "en",
 ) -> TravelPlanningState:
-    """Build the initial LangGraph state for a new request.
-
-    Uses build_canonical_state as the authoritative factory and maps the
-    result into the TypedDict that LangGraph requires at runtime.
-    """
-    language = user_language or _detect_language(user_query)
-
-    canonical = build_canonical_state(
-        request_id=request_id,
+    state = build_canonical_state(
         user_query=user_query,
-        user_language=language,
+        request_id=request_id,
+        correlation_id=correlation_id or request_id,
         user_id=user_id,
-        correlation_id=correlation_id,
+        user_language=user_language,
     )
-
-    return TravelPlanningState(
-        # ── Request ────────────────────────────────────────────────────────
-        request_id=canonical.request_id,
-        correlation_id=canonical.correlation_id,
-        user_id=canonical.user_id,
-        user_query=canonical.user_query,
-        user_language=canonical.user_language,
-        # ── Messages ───────────────────────────────────────────────────────
-        messages=[HumanMessage(content=user_query)],
-        # ── Orchestrator (legacy bridge) ───────────────────────────────────
-        orchestrator_plan=None,
-        orchestrator_decision=None,
-        orchestrator_params=None,
-        task_complete=False,
-        # ── Intent / stage ─────────────────────────────────────────────────
-        intent=None,
-        conversation_stage=canonical.conversation_stage,
-        query_type=None,
-        # ── Trip ───────────────────────────────────────────────────────────
-        trip_parameters=canonical.trip_parameters.model_dump(),
-        has_current_plan=False,
-        current_plan_status="none",
-        current_plan_version=0,
-        current_plan={},
-        feedback="",
-        follow_up_questions=[],
-        # ── Agent outputs ──────────────────────────────────────────────────
-        search_results=None,
-        search_context=None,
-        weather_data=None,
-        enriched_places=None,
-        distance_matrix=None,
-        raw_itinerary=None,
-        enriched_itinerary=None,
-        geocoded_locations=None,
-        validation_result=None,
-        final_response=None,
-        agent_scratchpad=None,
-        orchestration=None,
-        # ── Memory ─────────────────────────────────────────────────────────
-        user_memory=None,
-        relevant_episodes=[],
-        eval_score=None,
-        memory_saved=False,
-        # ── Execution ──────────────────────────────────────────────────────
-        execution_mode="normal",
-        execution_start_time=datetime.now(timezone.utc),
-        feature_flags={},
-        # ── Append-only (reducer lists — always start empty) ───────────────
-        agent_history=[],
-        errors=[],
-        router_trace=[],
-        # ── Budget ─────────────────────────────────────────────────────────
-        budget_state={
-            "llm_calls": 0,
-            "tool_calls": 0,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "estimated_cost_usd": 0.0,
-        },
-    )
+    runtime_state = state.model_dump(exclude_none=True)
+    runtime_state.setdefault("trip_parameters", {})
+    runtime_state.setdefault("user_memory", {})
+    runtime_state.setdefault("feature_flags", {})
+    runtime_state.setdefault("budget_state", {})
+    runtime_state.setdefault("agent_history", [])
+    runtime_state.setdefault("agent_scratchpad", {})
+    runtime_state.setdefault("router_trace", [])
+    runtime_state.setdefault("errors", [])
+    runtime_state.setdefault("follow_up_questions", [])
+    runtime_state.setdefault("search_results", [])
+    runtime_state.setdefault("enriched_places", [])
+    runtime_state.setdefault("distance_matrix", {})
+    runtime_state.setdefault("raw_itinerary", {})
+    runtime_state.setdefault("enriched_itinerary", {})
+    runtime_state.setdefault("validation_result", {})
+    runtime_state.setdefault("final_response", "")
+    runtime_state.setdefault("messages", [])
+    runtime_state.setdefault("orchestration", None)
+    runtime_state.setdefault("orchestrator_plan", {})
+    runtime_state.setdefault("orchestrator_decision", "")
+    runtime_state.setdefault("orchestrator_params", {})
+    runtime_state.setdefault("execution_mode", "api")
+    runtime_state.setdefault("memory_saved", False)
+    runtime_state.setdefault("eval_score", 0.0)
+    runtime_state.setdefault("task_complete", False)
+    runtime_state.setdefault("conversation_stage", "CONSULT")
+    runtime_state.setdefault("has_current_plan", False)
+    runtime_state.setdefault("current_plan_status", "")
+    runtime_state.setdefault("current_plan_version", 0)
+    runtime_state.setdefault("current_plan", {})
+    runtime_state.setdefault("feedback", "")
+    runtime_state.setdefault("intent", "INFO")
+    runtime_state.setdefault("user_query", user_query)
+    runtime_state.setdefault("request_id", request_id)
+    runtime_state.setdefault("user_id", user_id)
+    runtime_state.setdefault("correlation_id", correlation_id or request_id)
+    runtime_state.setdefault("user_language", user_language or "en")
+    runtime_state["messages"] = []
+    return runtime_state  # type: ignore[return-value]
 
 
 def to_canonical_state(state: dict[str, Any]) -> CanonicalTravelState:
-    """Convert a runtime dict into the canonical Pydantic model for validation.
+    cleaned = _strip_none(state)
+    cleaned.setdefault("trip_parameters", {})
+    cleaned.setdefault("user_memory", {})
+    cleaned.setdefault("validation_result", {})
+    cleaned.setdefault("distance_matrix", {})
+    cleaned.setdefault("follow_up_questions", [])
+    cleaned.setdefault("orchestration", None)
+    return CanonicalTravelState.model_validate(cleaned)
 
-    None values are dropped so Pydantic uses its own field defaults for
-    fields that have not been populated yet (e.g. search_results=None
-    at graph start becomes [] in the canonical model).
-    """
-    clean = {k: v for k, v in state.items() if v is not None}
-    return CanonicalTravelState.model_validate(clean)
-
-
-__all__ = [
-    "CanonicalTravelState",
-    "MemorySnapshot",
-    "QueryClassification",
-    "TravelPlanningState",
-    "TripParameters",
-    "ValidationResult",
-    "build_canonical_state",
-    "create_initial_state",
-    "to_canonical_state",
-]
