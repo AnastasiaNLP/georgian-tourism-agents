@@ -51,6 +51,8 @@ async def lifespan(app: FastAPI):
         logger.info("LangGraph compiled with AsyncPostgresSaver")
         yield
 
+    from src.memory.db import close_pool
+    await close_pool()
     logger.info("Shutdown complete")
 
 

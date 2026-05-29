@@ -179,6 +179,18 @@ async def health():
         if overall == "healthy":
             overall = "degraded"
 
+    try:
+        from src.memory.db import get_pool
+        pool = await get_pool()
+        async with pool.connection() as conn:
+            cursor = await conn.execute("SELECT 1")
+            await cursor.fetchone()
+        checks["postgres"] = "ok"
+    except Exception as e:
+        checks["postgres"] = f"error: {str(e)[:80]}"
+        if overall == "healthy":
+            overall = "degraded"
+
     checks["status"] = overall
     status_code = 503 if overall == "unhealthy" else 200
     return JSONResponse(content=checks, status_code=status_code)

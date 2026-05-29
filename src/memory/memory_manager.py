@@ -9,8 +9,12 @@ Bounded caps:
     MAX_INTERESTS = 20
     MAX_VISITED   = 50
     MAX_TRIPS     = 10
+
+Profile storage: Postgres (user_profiles table, JSONB).
+Episode storage: Qdrant (vector search).
 """
 
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -19,7 +23,6 @@ from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-PROFILE_TTL = 60 * 60 * 24 * 30
 EPISODE_COLLECTION = "user_memory_episodes_v1"
 EPISODE_VECTOR_SIZE = get_settings().vector_size
 
@@ -87,18 +90,28 @@ def merge_profile(
     return merged
 
 
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS user_profiles (
+    user_id    TEXT PRIMARY KEY,
+    profile    JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+
 class MemoryManager:
     """
-    Memory Manager — Profile (Redis) + Episodic (Qdrant).
+    Memory Manager — Profile (Postgres) + Episodic (Qdrant).
 
     Usage:
         mm = MemoryManager()
 
         # Load
-        profile = mm.load_profile(user_id)
+        profile = await mm.load_profile(user_id)
 
         # Save
-        mm.save_profile(user_id, new_data)
+        await mm.save_profile(user_id, new_data)
         await mm.save_episode(user_id, episode)
 
         # Retrieve episodes (only for PLAN + NORMAL)
@@ -106,72 +119,79 @@ class MemoryManager:
     """
 
     def __init__(self):
-        from src.tools.tool_cache import get_cache
-        self._cache = get_cache()
-        self._qdrant = None  # lazy init
+        self._qdrant = None
+        self._schema_ready = False
 
-    def _profile_key(self, user_id: str) -> str:
-        return f"profile:{user_id}"
+    async def _ensure_schema(self) -> None:
+        if self._schema_ready:
+            return
+        from src.memory.db import get_pool
+        pool = await get_pool()
+        async with pool.connection() as conn:
+            await conn.execute(_SCHEMA_SQL)
+        self._schema_ready = True
+        logger.info("memory: user_profiles schema ready")
 
     # ========================================================================
-    # 6A — Profile Memory (Redis)
+    # 6A — Profile Memory (Postgres)
     # ========================================================================
 
-    def load_profile(self, user_id: str) -> Dict[str, Any]:
-        """
-        Load user profile from Redis.
+    async def load_profile(self, user_id: str) -> Dict[str, Any]:
+        """Load user profile from Postgres."""
+        await self._ensure_schema()
+        from src.memory.db import get_pool
 
-        Metrics:
-            memory_hit: bool
-            load_latency_ms: float
-        """
         t0 = time.time()
-        key = self._profile_key(user_id)
-        profile = self._cache.get(key)
+        pool = await get_pool()
+        async with pool.connection() as conn:
+            cursor = await conn.execute(
+                "SELECT profile FROM user_profiles WHERE user_id = %s",
+                (user_id,),
+            )
+            row = await cursor.fetchone()
         latency_ms = (time.time() - t0) * 1000
 
-        if profile:
+        if row and row[0]:
+            logger.info(f"[memory] Profile HIT user={user_id} latency={latency_ms:.1f}ms")
+            return row[0]
+        logger.info(f"[memory] Profile MISS user={user_id} latency={latency_ms:.1f}ms → creating empty")
+        return empty_profile(user_id)
+
+    async def save_profile(self, user_id: str, new_data: Dict[str, Any]) -> bool:
+        """Upsert user profile into Postgres."""
+        await self._ensure_schema()
+        from src.memory.db import get_pool
+
+        pool = await get_pool()
+        try:
+            async with pool.connection() as conn:
+                cursor = await conn.execute(
+                    "SELECT profile FROM user_profiles WHERE user_id = %s",
+                    (user_id,),
+                )
+                row = await cursor.fetchone()
+                old = row[0] if (row and row[0]) else empty_profile(user_id)
+                updated = merge_profile(old, new_data)
+                await conn.execute(
+                    """
+                    INSERT INTO user_profiles (user_id, profile)
+                    VALUES (%s, %s::jsonb)
+                    ON CONFLICT (user_id)
+                    DO UPDATE SET profile = EXCLUDED.profile,
+                                  updated_at = NOW()
+                    """,
+                    (user_id, json.dumps(updated)),
+                )
             logger.info(
-                f"[memory] Profile HIT user={user_id} "
-                f"latency={latency_ms:.1f}ms"
+                f"[memory] Profile SAVE user={user_id} "
+                f"success=True "
+                f"interests={len(updated.get('interests', []))} "
+                f"visited={len(updated.get('visited_places', []))}"
             )
-            return profile
-        else:
-            logger.info(
-                f"[memory] Profile MISS user={user_id} "
-                f"latency={latency_ms:.1f}ms → creating empty"
-            )
-            return empty_profile(user_id)
-
-    def save_profile(
-        self,
-        user_id: str,
-        new_data: Dict[str, Any]
-    ) -> bool:
-        """
-        Save or update profile in Redis.
-
-        Metrics:
-            write_success_rate: bool
-        """
-        key = self._profile_key(user_id)
-
-        # Load previous profile.
-        old = self._cache.get(key) or empty_profile(user_id)
-
-        # Merge with caps.
-        updated = merge_profile(old, new_data)
-
-        # Save merged profile.
-        success = self._cache.set(key, updated, ttl_seconds=PROFILE_TTL)
-
-        logger.info(
-            f"[memory] Profile SAVE user={user_id} "
-            f"success={success} "
-            f"interests={len(updated['interests'])} "
-            f"visited={len(updated['visited_places'])}"
-        )
-        return success
+            return True
+        except Exception as exc:
+            logger.error(f"[memory] Profile SAVE failed user={user_id}: {exc}")
+            return False
 
     # ========================================================================
     # 6B — Episodic Memory (Qdrant)

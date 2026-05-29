@@ -96,7 +96,7 @@ async def memory_load_node(state: TravelPlanningState) -> dict:
             from src.memory.memory_manager import get_memory_manager
 
             mm = get_memory_manager()
-            profile = mm.load_profile(user_id)
+            profile = await mm.load_profile(user_id)
             result["user_memory"] = profile
             logger.info(f"[{request_id}] memory_load: profile loaded for {user_id}")
         except Exception as exc:
@@ -332,7 +332,7 @@ async def memory_save_node(state: TravelPlanningState) -> dict:
         mm = get_memory_manager()
         profile_data = mm.extract_profile_update(state)
         if profile_data:
-            mm.save_profile(user_id, profile_data)
+            await mm.save_profile(user_id, profile_data)
             logger.info(f"[{request_id}] memory_save: profile saved for {user_id}")
 
         mode = state.get("execution_mode", "normal")
