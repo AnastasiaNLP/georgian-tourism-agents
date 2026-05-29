@@ -73,7 +73,7 @@ def _merge_budget(state: Any, tracker: TokenTracker | None) -> dict[str, Any]:
 
 async def revision_agent_node(state: TravelPlanningState) -> dict[str, Any]:
     current_plan = _as_dict(_get_value(state, "current_plan")) or _as_dict(_get_value(state, "raw_itinerary"))
-    feedback = _get_value(state, "feedback", "") or ""
+    feedback = _get_value(state, "feedback", "") or _get_value(state, "user_query", "") or ""
     trip_parameters = _get_value(state, "trip_parameters", {})
 
     if not current_plan or not current_plan.get("days"):

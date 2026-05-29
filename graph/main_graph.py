@@ -79,6 +79,16 @@ async def memory_load_node(state: TravelPlanningState) -> dict:
             "completion_tokens": 0,
             "estimated_cost_usd": 0.0,
         },
+        # Per-turn fields: reset at the start of every turn so previous-turn
+        # values do not leak into the new turn via the checkpointer.
+        "agent_history": [],
+        "errors": [],
+        "router_trace": [],
+        "eval_score": {},
+        "final_response": "",
+        "feedback": "",
+        "follow_up_questions": [],
+        "trip_parameters": {},
     }
 
     if user_id:
@@ -190,6 +200,21 @@ def route_from_orchestrator(state: TravelPlanningState) -> str:
     if state.get("task_complete"):
         return "__end__"
 
+    # Intent is the primary routing signal from the classifier.
+    # Stage is derived UI state and only used as fallback.
+    orchestration = state.get("orchestration") or {}
+    intent = orchestration.get("intent") if isinstance(orchestration, dict) else getattr(orchestration, "intent", None)
+    if intent is None:
+        intent = state.get("intent")
+
+    if intent == "CONSULT":
+        return "consultation_agent"
+    if intent == "REVISE":
+        return "revision_agent"
+    if intent in {"PLAN", "INFO", "SEARCH"}:
+        return "search_agent"
+
+    # Fallback to stage if intent is missing.
     stage = state.get("conversation_stage")
     if stage == "CONSULT":
         return "consultation_agent"
@@ -198,16 +223,6 @@ def route_from_orchestrator(state: TravelPlanningState) -> str:
     if stage in {"PLAN", "INFO"}:
         return "search_agent"
 
-    orchestration = state.get("orchestration") or {}
-    intent = orchestration.get("intent") if isinstance(orchestration, dict) else getattr(orchestration, "intent", None)
-    if intent is None:
-        intent = state.get("intent")
-    if intent == "CONSULT":
-        return "consultation_agent"
-    if intent == "REVISE":
-        return "revision_agent"
-    if intent in {"PLAN", "INFO", "SEARCH"}:
-        return "search_agent"
     return _normalize_agent_decision(state.get("orchestrator_decision", "search_agent"))
 
 

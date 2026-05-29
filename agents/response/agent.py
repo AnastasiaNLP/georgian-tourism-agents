@@ -74,6 +74,16 @@ async def response_agent_node(state: dict) -> dict:
 
     from monitoring.token_tracker import TokenTracker, merge_budget
     tracker = TokenTracker(model="gpt-4o-mini")
+
+    plan_fields: dict = {}
+    if itinerary:
+        plan_fields = {
+            "has_current_plan": True,
+            "current_plan": itinerary,
+            "current_plan_status": "active",
+            "current_plan_version": max(state.get("current_plan_version") or 0, 1),
+        }
+
     try:
         response = await llm.ainvoke([
             SystemMessage(content=system_prompt),
@@ -92,6 +102,7 @@ async def response_agent_node(state: dict) -> dict:
                 agent="response_agent",
                 summary=f"Generated response ({len(final_response)} chars)",
             ),
+            **plan_fields,
         }
 
     except Exception as e:
@@ -103,6 +114,7 @@ async def response_agent_node(state: dict) -> dict:
             "agent_history": ["response_agent"],
             "errors": [f"response_agent: {str(e)}"],
             "agent_scratchpad": make_scratchpad("response_agent", "FALLBACK response"),
+            **plan_fields,
         }
 
 

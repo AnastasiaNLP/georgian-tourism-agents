@@ -10,6 +10,9 @@ Initialization order matters:
 import logging
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Configure LangSmith tracing before importing LangGraph.
 from monitoring.tracing import setup_langsmith_tracing
 setup_langsmith_tracing()

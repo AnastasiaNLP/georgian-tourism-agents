@@ -52,25 +52,24 @@ def setup_langsmith_tracing() -> bool:
 
 def get_run_config(
     request_id: str,
+    thread_id: str,
     user_id: str = None,
     extra_tags: list = None,
 ) -> dict:
     """
     Create LangGraph config with LangSmith metadata.
 
-    Adds request_id and user_id to each trace for filtering in LangSmith UI.
+    thread_id is the stable conversation/dialog identifier used by the
+    checkpointer. request_id is a per-request trace identifier for LangSmith.
 
     Args:
-        request_id: Unique request ID.
+        request_id: Unique per-request ID (for tracing/logging).
+        thread_id: Stable conversation ID (for checkpointer continuity).
         user_id: Optional user ID.
         extra_tags: Extra filtering tags.
 
     Returns:
         Config dict for graph.ainvoke(state, config=config).
-
-    Example:
-        config = get_run_config("req-123", user_id="user-456")
-        result = await graph.ainvoke(state, config=config)
     """
     tags = ["georgian-tourism"] + (extra_tags or [])
 
@@ -79,7 +78,7 @@ def get_run_config(
         metadata["user_id"] = user_id
 
     return {
-        "configurable": {"thread_id": request_id},
+        "configurable": {"thread_id": thread_id},
         "run_name": f"plan-{request_id[:8]}",
         "tags": tags,
         "metadata": metadata,

@@ -1,6 +1,7 @@
 """
 API router for LangGraph-backed planning endpoints.
 """
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -24,9 +25,15 @@ class PlanRequest(BaseModel):
                        description="User's travel query")
     user_id: Optional[str] = Field(None, description="Optional user ID for memory")
     language: str = Field("ru", description="Response language: ru/en/ka")
+    conversation_id: Optional[str] = Field(
+        None,
+        description="Stable conversation ID for multi-turn continuity. "
+                    "Return this value from the previous response to continue the dialog.",
+    )
 
 class PlanResponse(BaseModel):
     request_id: str
+    thread_id: str
     status: str
     response: str
     execution_mode: str
@@ -35,6 +42,14 @@ class PlanResponse(BaseModel):
     eval_score: Optional[dict]
     memory_saved: bool
     duration_seconds: float
+
+def _derive_thread_id(user_id: Optional[str], conversation_id: Optional[str]) -> str:
+    if conversation_id:
+        return conversation_id
+    if user_id:
+        return "user-" + hashlib.sha256(user_id.encode()).hexdigest()[:16]
+    return "anon-" + uuid.uuid4().hex[:16]
+
 
 _guardrails = None
 
@@ -52,23 +67,26 @@ async def plan_trip(request: PlanRequest, http_request: Request):
     Runs the LangGraph orchestrator loop and returns a travel itinerary.
     """
     request_id = str(uuid.uuid4())[:8]
+    thread_id = _derive_thread_id(request.user_id, request.conversation_id)
     started_at = datetime.now(timezone.utc)
 
     logger.info(f"[{request_id}] POST /plan query={request.query[:80]!r} "
-                f"lang={request.language} user={request.user_id}")
+                f"lang={request.language} user={request.user_id} thread={thread_id}")
 
     guard = _get_guardrails().check(request.query, request.language)
     if not guard.passed:
         logger.warning(f"[{request_id}] Guardrail REJECT: {guard.check_failed}")
         raise HTTPException(status_code=400, detail=guard.reason)
 
-    state = create_initial_state(
-        user_query=request.query,
-        request_id=request_id,
-        correlation_id=str(uuid.uuid4()),
-        user_id=request.user_id,
-        user_language=request.language,
-    )
+    # Only per-turn fields. Conversation-persistent state (has_current_plan,
+    # current_plan, trip_parameters, etc.) must survive from the checkpointer.
+    state = {
+        "user_query": request.query,
+        "request_id": request_id,
+        "correlation_id": str(uuid.uuid4()),
+        "user_language": request.language,
+        "user_id": request.user_id or "",
+    }
 
     graph = getattr(http_request.app.state, "graph", None)
     if graph is None:
@@ -76,6 +94,7 @@ async def plan_trip(request: PlanRequest, http_request: Request):
 
     config = get_run_config(
         request_id=request_id,
+        thread_id=thread_id,
         user_id=request.user_id,
     )
 
@@ -103,12 +122,13 @@ async def plan_trip(request: PlanRequest, http_request: Request):
 
     return PlanResponse(
         request_id=request_id,
+        thread_id=thread_id,
         status="ok",
         response=final_response,
         execution_mode=result.get("execution_mode", "normal"),
         agent_history=result.get("agent_history", []),
         has_itinerary=has_itinerary,
-        eval_score=result.get("eval_score"),
+        eval_score=result.get("eval_score") if isinstance(result.get("eval_score"), dict) else None,
         memory_saved=result.get("memory_saved", False),
         duration_seconds=round(duration, 2),
     )

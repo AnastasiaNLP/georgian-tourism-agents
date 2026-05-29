@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import operator
-from typing import Any, Annotated, Optional, TypedDict, Union
+from typing import Any, Annotated, List, Optional, TypedDict, Union
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
@@ -14,6 +14,13 @@ from state.contracts import (
     ValidationResult,
     build_canonical_state,
 )
+
+
+def _append_or_reset(existing: List, update: List) -> List:
+    """Reducer: empty list resets, non-empty list appends."""
+    if not update:
+        return []
+    return (existing or []) + update
 
 
 class TravelPlanningState(TypedDict, total=False):
@@ -45,10 +52,10 @@ class TravelPlanningState(TypedDict, total=False):
 
     feature_flags: dict[str, bool]
     budget_state: dict[str, Any]
-    agent_history: Annotated[list[str], operator.add]
+    agent_history: Annotated[list[str], _append_or_reset]
     agent_scratchpad: dict[str, Any]
-    router_trace: Annotated[list[dict[str, Any]], operator.add]
-    errors: Annotated[list[str], operator.add]
+    router_trace: Annotated[list[dict[str, Any]], _append_or_reset]
+    errors: Annotated[list[str], _append_or_reset]
     messages: Annotated[list[AnyMessage], add_messages]
 
     orchestration: Optional[Union[QueryClassification, dict[str, Any]]]
@@ -59,7 +66,7 @@ class TravelPlanningState(TypedDict, total=False):
     execution_start_time: float
     execution_mode: str
     memory_saved: bool
-    eval_score: float
+    eval_score: dict
     task_complete: bool
 
 
@@ -110,7 +117,7 @@ def create_initial_state(
     runtime_state.setdefault("orchestrator_params", {})
     runtime_state.setdefault("execution_mode", "api")
     runtime_state.setdefault("memory_saved", False)
-    runtime_state.setdefault("eval_score", 0.0)
+    runtime_state.setdefault("eval_score", {})
     runtime_state.setdefault("task_complete", False)
     runtime_state.setdefault("conversation_stage", "CONSULT")
     runtime_state.setdefault("has_current_plan", False)
