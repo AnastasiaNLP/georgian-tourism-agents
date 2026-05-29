@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     Lifecycle manager.
     Build the graph and checkpointer once at startup.
     """
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from graph.main_graph import build_graph
     from agents.registry import get_registry
 
@@ -44,9 +44,11 @@ async def lifespan(app: FastAPI):
     registry.initialize()
     logger.info("AgentRegistry initialized")
 
-    async with AsyncSqliteSaver.from_conn_string("checkpoints.db") as checkpointer:
+    settings = get_settings()
+    async with AsyncPostgresSaver.from_conn_string(settings.database_url) as checkpointer:
+        await checkpointer.setup()
         app.state.graph = build_graph(checkpointer=checkpointer)
-        logger.info("LangGraph compiled with AsyncSqliteSaver")
+        logger.info("LangGraph compiled with AsyncPostgresSaver")
         yield
 
     logger.info("Shutdown complete")

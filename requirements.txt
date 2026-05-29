@@ -144,6 +144,11 @@ websockets==15.0.1
 xxhash==3.6.0
 yarl==1.22.0
 zipp==3.23.0
+langgraph-checkpoint-postgres
+psycopg[binary,pool]
+ langgraph-checkpoint-postgres==2.0.25
+psycopg==3.2.13
+psycopg-pool==3.2.8
 # ========== NVIDIA CUDA (for GPU support) ==========
 # These are auto-installed with torch==2.8.0
 # Uncomment for GPU-specific installations

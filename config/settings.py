@@ -21,7 +21,7 @@ class Settings(BaseModel, frozen=True):
     api_key: Optional[str] = None
     cors_origins: str = "http://localhost:3000"
     rate_limit_rpm: int = 10
-
+    database_url: str = ""
     # LLM providers
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
@@ -93,6 +93,7 @@ def get_settings() -> Settings:
         api_key=os.getenv("API_KEY"),
         cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000"),
         rate_limit_rpm=_get_int("RATE_LIMIT_RPM", 10),
+        database_url=os.getenv("DATABASE_URL", ""),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
         llm_model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
