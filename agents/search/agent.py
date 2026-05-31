@@ -19,8 +19,21 @@ def _do_search(search_query: str, region: Optional[str], max_results: int) -> li
 
     load_regions.cache_clear()
 
-    fetch_k = max_results * 3 if region else max_results
+    # Canonical regions use native Qdrant filter on structured payload field.
+    # Non-canonical values (Abkhazia, South Ossetia, typos, etc.) fall through
+    # to legacy post-filter on free-text location field.
+    canonical_regions = set(load_regions().keys())
 
+    if region and region in canonical_regions:
+        all_results = cached_search_qdrant(
+            search_query,
+            top_k=max_results,
+            filters={"region": region},
+        )
+        return all_results
+
+    # Fallback: no region or non-canonical — over-fetch then post-filter.
+    fetch_k = max_results * 3 if region else max_results
     all_results = cached_search_qdrant(search_query, top_k=fetch_k)
 
     if region and all_results:

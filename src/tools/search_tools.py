@@ -140,6 +140,14 @@ def search_qdrant(
                 )
             )
 
+        if filters.get("region"):
+            conditions.append(
+                FieldCondition(
+                    key="region",
+                    match=MatchValue(value=filters["region"])
+                )
+            )
+
         if conditions:
             qdrant_filter = Filter(must=conditions)
 
