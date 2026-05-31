@@ -36,6 +36,7 @@ async def response_agent_node(state: dict) -> dict:
     search_results = state.get("search_results") or []
 
     itinerary = enriched or raw
+    intent = state.get("intent") or ""
 
     llm = ChatOpenAI(
         model="gpt-4o-mini",
@@ -50,7 +51,11 @@ async def response_agent_node(state: dict) -> dict:
     import json
     content_parts = [f"USER REQUEST: {user_query}\n"]
 
-    if itinerary:
+    # For INFO/SEARCH intents, use fresh search_results — never the (possibly
+    # stale) itinerary inherited from a previous turn's checkpoint.
+    prefer_search = intent in {"INFO", "SEARCH"} and bool(search_results)
+
+    if not prefer_search and itinerary:
         content_parts.append(
             f"ITINERARY DATA:\n```json\n"
             f"{json.dumps(itinerary, ensure_ascii=False, indent=2)}\n```"
@@ -75,8 +80,10 @@ async def response_agent_node(state: dict) -> dict:
     from monitoring.token_tracker import TokenTracker, merge_budget
     tracker = TokenTracker(model="gpt-4o-mini")
 
+    # INFO/SEARCH flows must not touch current_plan — they are informational
+    # and should leave any existing plan untouched for subsequent REVISE turns.
     plan_fields: dict = {}
-    if itinerary:
+    if itinerary and intent not in {"INFO", "SEARCH"}:
         plan_fields = {
             "has_current_plan": True,
             "current_plan": itinerary,
