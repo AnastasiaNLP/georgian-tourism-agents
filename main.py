@@ -11,7 +11,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 # Configure LangSmith tracing before importing LangGraph.
 from monitoring.tracing import setup_langsmith_tracing

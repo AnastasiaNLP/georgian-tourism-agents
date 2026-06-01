@@ -246,6 +246,22 @@ def route_after_search(state: TravelPlanningState) -> str:
     return "geo_agent" if intent == "PLAN" else "response_agent"
 
 
+def route_after_validation(state: TravelPlanningState) -> str:
+    """
+    Route after validation based on recommended_action.
+    - retry → planning_agent (re-generate plan, max 2 attempts)
+    - anything else → response_agent
+
+    Anti-loop guard lives inside validation_agent: it converts
+    "retry" to "proceed" after 2 planning attempts.
+    """
+    result = state.get("validation_result") or {}
+    action = result.get("recommended_action", "proceed")
+    if action == "retry":
+        return "planning_agent"
+    return "response_agent"
+
+
 def route_after_planning(state: TravelPlanningState) -> str:
     flags = state.get("feature_flags") or {}
     return "validation_agent" if flags.get("ENABLE_VALIDATION", True) else "response_agent"
@@ -375,7 +391,14 @@ def build_graph(checkpointer=None):
     wf.add_edge("memory_load", "orchestrator_plan")
 
     wf.add_edge("geo_agent", "planning_agent")
-    wf.add_edge("validation_agent", "response_agent")
+    wf.add_conditional_edges(
+        "validation_agent",
+        route_after_validation,
+        {
+            "planning_agent": "planning_agent",
+            "response_agent": "response_agent",
+        },
+    )
     wf.add_edge("revision_agent", "validation_agent")
     wf.add_edge("response_agent", "eval_node")
     wf.add_edge("eval_node", "memory_save")

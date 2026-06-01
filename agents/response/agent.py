@@ -75,6 +75,17 @@ async def response_agent_node(state: dict) -> dict:
     if val.get("warnings"):
         content_parts.append(f"\nNOTES: {'; '.join(val['warnings'][:2])}")
 
+    if state.get("execution_mode") == "degraded":
+        errs = val.get("errors") or []
+        if errs:
+            issues_text = "\n".join(f"- {e}" for e in errs[:3])
+            content_parts.append(
+                f"IMPORTANT: This plan has known issues that could not be fixed:\n"
+                f"{issues_text}\n"
+                f"Mention these limitations honestly to the user in your response — "
+                f"briefly explain that some distances or activities may not be optimal."
+            )
+
     user_content = "\n\n".join(content_parts)
 
     from monitoring.token_tracker import TokenTracker, merge_budget

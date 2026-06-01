@@ -54,11 +54,15 @@ async def validation_agent_node(state: dict) -> dict:
 
     # Hard errors do not need LLM review.
     if result["errors"]:
-        if planning_count >= 2:
+        is_degraded = planning_count >= 2
+        if is_degraded:
             result["recommended_action"] = "proceed"
-        logger.info(f"[{request_id}] validation_agent: FAILED programmatic, "
-                    f"{len(result['errors'])} errors")
-        return {
+        logger.info(
+            f"[{request_id}] validation_agent: FAILED programmatic, "
+            f"{len(result['errors'])} errors"
+            f"{' (retry exhausted → degraded)' if is_degraded else ' (→ retry)'}"
+        )
+        return_dict = {
             "validation_result": result,
             "agent_history": ["validation_agent"],
             "agent_scratchpad": make_scratchpad(
@@ -67,6 +71,13 @@ async def validation_agent_node(state: dict) -> dict:
                 is_valid=False, action=result["recommended_action"]
             ),
         }
+        if is_degraded:
+            return_dict["execution_mode"] = "degraded"
+            return_dict["errors"] = [f"validation: {e}" for e in result["errors"][:3]]
+        elif result["recommended_action"] == "retry":
+            return_dict["raw_itinerary"] = {}
+            return_dict["enriched_itinerary"] = {}
+        return return_dict
 
     # Warnings may use one optional LLM call for a final verdict.
     tracker = TokenTracker(model="gpt-4o-mini")

@@ -27,6 +27,27 @@ def test_graph_compiles():
     assert type(graph).__name__ == "CompiledStateGraph"
 
 
+def test_validation_errors_route_to_planning_retry():
+    from graph.main_graph import route_after_validation
+
+    state = {"validation_result": {"recommended_action": "retry"}}
+    assert route_after_validation(state) == "planning_agent"
+
+
+def test_validation_proceed_routes_to_response():
+    from graph.main_graph import route_after_validation
+
+    state = {"validation_result": {"recommended_action": "proceed"}}
+    assert route_after_validation(state) == "response_agent"
+
+
+def test_validation_empty_result_defaults_to_response():
+    from graph.main_graph import route_after_validation
+
+    assert route_after_validation({}) == "response_agent"
+    assert route_after_validation({"validation_result": {}}) == "response_agent"
+
+
 def test_orchestrator_params_are_merged_from_steps():
     from graph.main_graph import _merged_orchestrator_params
 
