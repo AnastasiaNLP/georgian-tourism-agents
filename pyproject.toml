@@ -1,6 +1,6 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
-addopts = ["-p", "pytest_asyncio.plugin"]
+addopts = []
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [

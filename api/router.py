@@ -1,6 +1,7 @@
 """
 API router for LangGraph-backed planning endpoints.
 """
+import asyncio
 import hashlib
 import logging
 import uuid
@@ -17,6 +18,23 @@ from state.schema import create_initial_state
 from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+_active_threads: set[str] = set()
+_active_threads_lock = asyncio.Lock()
+
+
+async def _try_acquire_thread(thread_id: str) -> bool:
+    async with _active_threads_lock:
+        if thread_id in _active_threads:
+            return False
+        _active_threads.add(thread_id)
+        return True
+
+
+async def _release_thread(thread_id: str) -> None:
+    async with _active_threads_lock:
+        _active_threads.discard(thread_id)
+
 
 router = APIRouter()
 
@@ -78,6 +96,17 @@ async def plan_trip(request: PlanRequest, http_request: Request):
         logger.warning(f"[{request_id}] Guardrail REJECT: {guard.check_failed}")
         raise HTTPException(status_code=400, detail=guard.reason)
 
+    if not await _try_acquire_thread(thread_id):
+        logger.warning(f"[{request_id}] thread_busy thread={thread_id}")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "thread_busy",
+                "message": "This conversation is already processing a request. Retry in a few seconds.",
+                "thread_id": thread_id,
+            },
+        )
+
     # Only per-turn fields. Conversation-persistent state (has_current_plan,
     # current_plan, trip_parameters, etc.) must survive from the checkpointer.
     state = {
@@ -106,6 +135,7 @@ async def plan_trip(request: PlanRequest, http_request: Request):
         raise HTTPException(status_code=500, detail=f"Graph error: {str(e)[:200]}")
     finally:
         ACTIVE_REQUESTS.dec()
+        await _release_thread(thread_id)
 
     duration = (datetime.now(timezone.utc) - started_at).total_seconds()
 
