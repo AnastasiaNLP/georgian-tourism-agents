@@ -7,6 +7,7 @@ Initialization order matters:
 2. FastAPI app + lifespan
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -49,6 +50,12 @@ async def lifespan(app: FastAPI):
         await checkpointer.setup()
         app.state.graph = build_graph(checkpointer=checkpointer)
         logger.info("LangGraph compiled with AsyncPostgresSaver")
+
+        from src.tools.embeddings import get_embedding_model
+        logger.info("Warming up embedding model...")
+        await asyncio.to_thread(get_embedding_model)
+        logger.info("Embedding model ready")
+
         yield
 
     from src.memory.db import close_pool
