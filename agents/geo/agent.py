@@ -114,21 +114,37 @@ async def _geo_enrich_places(state: dict) -> dict:
     async def geocode_place(place: dict) -> dict:
         name = place.get("name", "")
         loc = place.get("location", "")
+        enriched = dict(place)
+
+        # Prefer pre-computed coordinates from Qdrant payload (Wikidata backfill).
+        # These are precise; ORS geocoding by name often hallucinates by 1000+ km.
+        meta = place.get("metadata") or {}
+        payload_lat = meta.get("lat")
+        payload_lon = meta.get("lon")
+        if isinstance(payload_lat, (int, float)) and isinstance(payload_lon, (int, float)):
+            if _in_georgia(payload_lat, payload_lon):
+                enriched["lat"] = float(payload_lat)
+                enriched["lon"] = float(payload_lon)
+                enriched["coord_source"] = "qdrant_payload"
+                return enriched
+            else:
+                logger.warning(
+                    f"[{request_id}] payload coords for '{name}' "
+                    f"({payload_lat:.3f},{payload_lon:.3f}) outside Georgia — falling back to ORS"
+                )
+
+        # Fallback: ORS geocoding by name + city hint.
         # City hint comes directly from the Qdrant location field; no hardcoding.
-        # Example: "Batumi, Adjara, Georgia" -> "Batumi".
-        # ORS handles both Latin and Cyrillic.
         city = _city_from_location(loc)
         query = f"{name}, {city}" if (name and city) else (name if name else loc)
         try:
             result = cached_geocode_city(query)
-            enriched = dict(place)
             if "lat" in result and "lon" in result:
                 lat, lon = result["lat"], result["lon"]
-                # Only sanity-check: result must be inside Georgia.
-                # ORS already filters by boundary.country=GE; this catches edge cases.
                 if _in_georgia(lat, lon):
                     enriched["lat"] = lat
                     enriched["lon"] = lon
+                    enriched["coord_source"] = "ors"
                 else:
                     logger.warning(
                         f"[{request_id}] geocode '{query}' → ({lat:.3f},{lon:.3f}) "
@@ -137,14 +153,19 @@ async def _geo_enrich_places(state: dict) -> dict:
             return enriched
         except Exception as e:
             logger.warning(f"[{request_id}] geocode failed for '{query}': {e}")
-            return dict(place)
+            return enriched
 
     enriched_places = list(await asyncio.gather(
         *[geocode_place(p) for p in search_results]
     ))
 
     geocoded = [p for p in enriched_places if p.get("lat")]
-    logger.info(f"[{request_id}] geo_enrich_places: {len(geocoded)}/{len(enriched_places)} geocoded")
+    qdrant_coords = sum(1 for p in enriched_places if p.get("coord_source") == "qdrant_payload")
+    ors_coords = sum(1 for p in enriched_places if p.get("coord_source") == "ors")
+    logger.info(
+        f"[{request_id}] geo_enrich_places: {len(geocoded)}/{len(enriched_places)} geocoded "
+        f"(qdrant: {qdrant_coords}, ors: {ors_coords})"
+    )
 
     # Step 2: build route pairs for chain routes and first-place fan-out.
     distance_matrix = {}
