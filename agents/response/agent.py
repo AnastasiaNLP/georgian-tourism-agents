@@ -93,14 +93,25 @@ async def response_agent_node(state: dict) -> dict:
 
     # INFO/SEARCH flows must not touch current_plan — they are informational
     # and should leave any existing plan untouched for subsequent REVISE turns.
+    # Degraded plans must not overwrite current_plan either — the next REVISE
+    # should work with the last valid plan, not a broken one.
     plan_fields: dict = {}
-    if itinerary and intent not in {"INFO", "SEARCH"}:
+    if (
+        itinerary
+        and intent not in {"INFO", "SEARCH"}
+        and execution_mode != "degraded"
+    ):
         plan_fields = {
             "has_current_plan": True,
             "current_plan": itinerary,
             "current_plan_status": "active",
             "current_plan_version": max(state.get("current_plan_version") or 0, 1),
         }
+    elif execution_mode == "degraded" and itinerary:
+        logger.info(
+            f"[{request_id}] response_agent: degraded mode — "
+            f"keeping previous current_plan, not writing broken itinerary"
+        )
 
     try:
         response = await llm.ainvoke([

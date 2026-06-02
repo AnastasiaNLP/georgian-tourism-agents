@@ -337,9 +337,14 @@ async def eval_node(state: TravelPlanningState) -> dict:
 async def memory_save_node(state: TravelPlanningState) -> dict:
     request_id = state.get("request_id", "unknown")
     user_id = state.get("user_id")
+    mode = state.get("execution_mode", "normal")
 
     if not user_id:
         logger.info(f"[{request_id}] memory_save: no user_id, skipping")
+        return {"memory_saved": False}
+
+    if mode == "degraded":
+        logger.info(f"[{request_id}] memory_save: skip profile and episode (mode=degraded)")
         return {"memory_saved": False}
 
     try:
@@ -351,18 +356,17 @@ async def memory_save_node(state: TravelPlanningState) -> dict:
             await mm.save_profile(user_id, profile_data)
             logger.info(f"[{request_id}] memory_save: profile saved for {user_id}")
 
-        mode = state.get("execution_mode", "normal")
         history = state.get("agent_history", [])
         has_itinerary = state.get("enriched_itinerary") or state.get("raw_itinerary")
 
-        if mode == "normal" and "planning_agent" in history and has_itinerary:
+        if "planning_agent" in history and has_itinerary:
             episode = mm.extract_episode(state)
             await mm.save_episode(user_id, episode)
             logger.info(f"[{request_id}] memory_save: episode saved for {user_id}")
         else:
             logger.info(
                 f"[{request_id}] memory_save: skip episode "
-                f"(mode={mode}, planning={'planning_agent' in history}, itinerary={bool(has_itinerary)})"
+                f"(planning={'planning_agent' in history}, itinerary={bool(has_itinerary)})"
             )
         return {"memory_saved": True}
     except Exception as exc:

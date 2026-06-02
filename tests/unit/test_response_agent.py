@@ -83,6 +83,20 @@ async def test_response_agent_no_plan_fields_without_itinerary():
 
 
 @pytest.mark.asyncio
+async def test_response_agent_skips_current_plan_on_degraded():
+    """Degraded plans must not overwrite current_plan in checkpoint."""
+    from agents.response.agent import response_agent_node
+
+    state = {**BASE_STATE, "execution_mode": "degraded"}
+    with patch("agents.response.agent.ChatOpenAI", return_value=_mock_llm_response("Degraded plan.")):
+        result = await response_agent_node(state)
+
+    assert "has_current_plan" not in result
+    assert "current_plan" not in result
+    assert result["task_complete"] is True
+
+
+@pytest.mark.asyncio
 async def test_response_agent_sets_current_plan_on_fallback():
     from agents.response.agent import response_agent_node
 
