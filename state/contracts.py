@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 ConversationStage = Literal["CONSULT", "PLAN", "REVISE", "POST_REVIEW", "INFO"]
@@ -22,6 +22,15 @@ class QueryClassification(BaseModel):
     steps: list[dict[str, Any]] = Field(default_factory=list)
     reasoning: str = ""
     estimated_agents: int = 0
+
+    @model_validator(mode="after")
+    def sync_stage_with_intent(self) -> "QueryClassification":
+        """Keep conversation_stage in sync with intent.
+        LLM sometimes leaves stage as default CONSULT even when intent is PLAN/INFO/REVISE.
+        """
+        if self.conversation_stage == "CONSULT" and self.intent != "CONSULT":
+            self.conversation_stage = self.intent  # type: ignore[assignment]
+        return self
 
 
 class TripParameters(BaseModel):

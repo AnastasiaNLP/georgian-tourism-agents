@@ -73,7 +73,13 @@ system: |
   ## Response format
 
   You must respond with valid JSON matching the OrchestratorPlan schema.
-  The graph reads the steps only to infer intent and merge params.
+  The graph reads intent and conversation_stage directly from your response.
+  Set both fields explicitly and keep them in sync:
+  - intent: "PLAN" when building an itinerary, "INFO" or "SEARCH" for exploration,
+    "CONSULT" only when key parameters (region, days) are missing,
+    "REVISE" when updating an existing plan.
+  - conversation_stage: must always match intent exactly.
+    Never return conversation_stage="CONSULT" when intent="PLAN".
   The "search_query" in search_agent params MUST be in English — it goes directly
   into a vector database. Translate from the user's language if needed.
 
