@@ -372,11 +372,12 @@ class MemoryManager:
                     loc = activity.get("location") or activity.get("name")
                     if loc:
                         visited.append(loc)
-        if visited:
+        intent = get("intent", "")
+        if visited and intent in {"PLAN", "REVISE"}:
             update["visited_places"] = list(set(visited))
 
         # Short trip entry
-        if itinerary:
+        if itinerary and intent in {"PLAN", "REVISE"}:
             days_count = len(itinerary.get("days", []))
             # execution_mode can be a string or enum-like object.
             mode_raw = get("execution_mode", "normal")
