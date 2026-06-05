@@ -42,9 +42,16 @@ def geocode_city(city: str) -> dict:
     params = {
         "api_key": ORS_API_KEY,
         "text": city,
-        "boundary.country": "GE",  # Limit to Georgia
-        "size": 1,                  # Only top result
+        "boundary.country": "GE",   # Limit to Georgia
+        "focus.point.lat": 41.9,    # Georgia centroid — biases results toward Georgia
+        "focus.point.lon": 44.0,    # when boundary.country has no exact match
+        "size": 3,                  # Fetch top 3, pick first within Georgia bbox
     }
+
+    # Georgia bounding box for post-filter.
+    # ORS/Pelias may return out-of-country results when boundary.country finds no match.
+    _LAT = (41.0, 43.6)
+    _LON = (40.5, 46.7)
 
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -55,9 +62,17 @@ def geocode_city(city: str) -> dict:
         if not data.get("features"):
             return {"error": f"City '{city}' not found"}
 
-        feature = data["features"][0]
-        coords = feature["geometry"]["coordinates"]
+        # Pick first result that falls within Georgia bounding box.
+        feature = None
+        for f in data["features"]:
+            c = f["geometry"]["coordinates"]
+            if _LAT[0] <= c[1] <= _LAT[1] and _LON[0] <= c[0] <= _LON[1]:
+                feature = f
+                break
+        if feature is None:
+            return {"error": f"No result within Georgia for '{city}'"}
 
+        coords = feature["geometry"]["coordinates"]
         # OpenRouteService returns [lon, lat]
         lon, lat = coords
 

@@ -135,9 +135,15 @@ async def _geo_enrich_places(state: dict) -> dict:
 
         # Fallback: ORS geocoding by name + city hint.
         # Prefer settlement > municipality from Qdrant payload (more specific than location field).
+        # Payload values may be lists (e.g. ['Sagarejo']) — take first element.
+        def _first(val):
+            if isinstance(val, list):
+                return val[0] if val else ""
+            return val or ""
+
         city = (
-            meta.get("settlement")
-            or meta.get("municipality")
+            _first(meta.get("settlement"))
+            or _first(meta.get("municipality"))
             or _city_from_location(loc)
         )
         query = f"{name}, {city}" if (name and city) else (name if name else loc)

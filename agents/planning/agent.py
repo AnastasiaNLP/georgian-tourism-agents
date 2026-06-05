@@ -73,6 +73,7 @@ OUTPUT — ONLY valid JSON, no markdown, no explanation:
     llm = ChatOpenAI(
         model="gpt-4o-mini", temperature=0.2, max_tokens=3000,
         api_key=get_settings().openai_api_key,
+        timeout=60,
     )
     tracker = TokenTracker(model="gpt-4o-mini")
 

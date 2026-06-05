@@ -116,7 +116,7 @@ async def validation_agent_node(state: dict) -> dict:
             }
 
         llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, max_tokens=400,
-                         api_key=api_key)
+                         api_key=api_key, timeout=60)
         prompt = (
             f"Review these travel itinerary warnings and decide if they are acceptable:\n"
             f"WARNINGS: {result['warnings']}\n"

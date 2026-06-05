@@ -43,6 +43,7 @@ async def response_agent_node(state: dict) -> dict:
         temperature=0.4,
         max_tokens=2500,
         api_key=get_settings().openai_api_key,
+        timeout=60,
     )
 
     system_prompt = get_response_prompt(language=user_language, mode=execution_mode)
