@@ -6,26 +6,31 @@ from typing import Optional
 
 from psycopg_pool import AsyncConnectionPool
 
-from config.settings import get_settings
-
 logger = logging.getLogger(__name__)
 
 _pool: Optional[AsyncConnectionPool] = None
 
 
-async def get_pool() -> AsyncConnectionPool:
-    """Lazy singleton pool for memory storage."""
+async def init_pool(conninfo: str) -> AsyncConnectionPool:
+    """Explicitly initialize pool with given conninfo. Called once from lifespan."""
     global _pool
     if _pool is None:
-        settings = get_settings()
         _pool = AsyncConnectionPool(
-            conninfo=settings.database_url,
+            conninfo=conninfo,
             min_size=1,
             max_size=5,
             open=False,
         )
         await _pool.open()
         logger.info("memory: AsyncConnectionPool opened (max_size=5)")
+    return _pool
+
+
+async def get_pool() -> AsyncConnectionPool:
+    """Return existing pool; lazy-init as fallback (tests / standalone scripts)."""
+    if _pool is None:
+        from config.settings import get_settings
+        return await init_pool(get_settings().database_url)
     return _pool
 
 

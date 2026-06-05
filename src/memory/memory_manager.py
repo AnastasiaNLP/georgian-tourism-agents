@@ -122,6 +122,10 @@ class MemoryManager:
         self._qdrant = None
         self._schema_ready = False
 
+    async def setup(self) -> None:
+        """Run schema setup once at startup. Called from lifespan."""
+        await self._ensure_schema()
+
     async def _ensure_schema(self) -> None:
         if self._schema_ready:
             return
@@ -138,7 +142,6 @@ class MemoryManager:
 
     async def load_profile(self, user_id: str) -> Dict[str, Any]:
         """Load user profile from Postgres."""
-        await self._ensure_schema()
         from src.memory.db import get_pool
 
         t0 = time.time()
@@ -159,7 +162,6 @@ class MemoryManager:
 
     async def save_profile(self, user_id: str, new_data: Dict[str, Any]) -> bool:
         """Upsert user profile into Postgres."""
-        await self._ensure_schema()
         from src.memory.db import get_pool
 
         pool = await get_pool()

@@ -164,9 +164,15 @@ async def plan_trip(request: PlanRequest, http_request: Request):
     )
 
 
-@router.get("/health")
-async def health():
-    """Health check for runtime dependencies."""
+@router.get("/health/live")
+async def liveness():
+    """Liveness probe: is the process alive?"""
+    return {"status": "ok"}
+
+
+@router.get("/health/ready")
+async def readiness(http_request: Request):
+    """Readiness probe: are all runtime dependencies reachable?"""
     from fastapi.responses import JSONResponse
     checks = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -224,3 +230,9 @@ async def health():
     checks["status"] = overall
     status_code = 503 if overall == "unhealthy" else 200
     return JSONResponse(content=checks, status_code=status_code)
+
+
+@router.get("/health")
+async def health(http_request: Request):
+    """Legacy alias → readiness."""
+    return await readiness(http_request)

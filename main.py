@@ -51,6 +51,12 @@ async def lifespan(app: FastAPI):
         app.state.graph = build_graph(checkpointer=checkpointer)
         logger.info("LangGraph compiled with AsyncPostgresSaver")
 
+        from src.memory.db import init_pool
+        from src.memory.memory_manager import get_memory_manager
+        await init_pool(settings.database_url)
+        await get_memory_manager().setup()
+        logger.info("MemoryManager schema ready")
+
         from src.tools.embeddings import get_embedding_model
         logger.info("Warming up embedding model...")
         await asyncio.to_thread(get_embedding_model)

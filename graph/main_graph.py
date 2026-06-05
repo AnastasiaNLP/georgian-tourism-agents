@@ -167,6 +167,22 @@ async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
         "REVISE": "revision_agent",
     }.get(intent, "search_agent")
 
+    orchestration_dict = classification.model_dump() if hasattr(classification, "model_dump") else plan_dict
+
+    # Consent guard: PLAN without required parameters → ask clarification first.
+    # route_from_orchestrator reads orchestration.intent, so we patch both.
+    if intent == "PLAN":
+        days = params.get("days")
+        region = params.get("region", "").strip()
+        if not days or not region:
+            logger.info(
+                f"[{request_id}] consent guard: PLAN without days={days} "
+                f"region={region!r} → consultation_agent"
+            )
+            next_agent = "consultation_agent"
+            intent = "CONSULT"
+            orchestration_dict = {**orchestration_dict, "intent": "CONSULT"}
+
     logger.info(
         f"[{request_id}] classifier: intent={intent}, "
         f"params={params}, llm_plan={[_agent_from_step(step) for step in steps]}"
@@ -178,6 +194,7 @@ async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
         "orchestrator_params": params,
         "intent": intent,
         "conversation_stage": getattr(classification, "conversation_stage", intent),
+        "feedback": state.get("user_query", "") if intent == "REVISE" else state.get("feedback", ""),
         "trip_parameters": {
             "days": params.get("days"),
             "pace": params.get("pace", "moderate"),
@@ -185,7 +202,7 @@ async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
             "search_query": params.get("search_query", ""),
             "consent_to_plan": intent == "PLAN",
         },
-        "orchestration": classification.model_dump() if hasattr(classification, "model_dump") else plan_dict,
+        "orchestration": orchestration_dict,
         "budget_state": merge_budget(state.get("budget_state") or {}, tracker),
         "router_trace": [{
             "from": "classifier",
