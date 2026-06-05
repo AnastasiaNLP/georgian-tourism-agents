@@ -134,8 +134,12 @@ async def _geo_enrich_places(state: dict) -> dict:
                 )
 
         # Fallback: ORS geocoding by name + city hint.
-        # City hint comes directly from the Qdrant location field; no hardcoding.
-        city = _city_from_location(loc)
+        # Prefer settlement > municipality from Qdrant payload (more specific than location field).
+        city = (
+            meta.get("settlement")
+            or meta.get("municipality")
+            or _city_from_location(loc)
+        )
         query = f"{name}, {city}" if (name and city) else (name if name else loc)
         try:
             result = cached_geocode_city(query)
