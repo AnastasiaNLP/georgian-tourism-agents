@@ -14,11 +14,13 @@ logger = logging.getLogger(__name__)
 
 # Timeout per agent in seconds.
 AGENT_TIMEOUTS = {
-    "search_agent":     60,
-    "planning_agent":   90,
-    "geo_agent":        60,
-    "validation_agent": 45,
-    "response_agent":   90,
+    "search_agent":       60,
+    "planning_agent":     90,
+    "geo_agent":          60,
+    "validation_agent":   45,
+    "response_agent":     90,
+    "consultation_agent": 30,
+    "revision_agent":     60,
 }
 
 
@@ -27,17 +29,18 @@ def safe_node(fn: Callable, agent_name: str) -> Callable:
     Wrap a node with timeout and error cascade handling.
 
     On timeout or exception, return a partial state update instead of raising.
+    Timeout is read from AGENT_TIMEOUTS at execution time so runtime patches work.
     """
-    timeout = AGENT_TIMEOUTS.get(agent_name, 40)
-
     @wraps(fn)
     async def wrapper(state: dict) -> dict:
+        timeout = AGENT_TIMEOUTS.get(agent_name, 40)
         try:
             return await asyncio.wait_for(fn(state), timeout=timeout)
         except asyncio.TimeoutError:
+            # Whole agent hung — not transient, always degrade.
             logger.warning(f"[{agent_name}] timeout {timeout}s")
             return _escalate(state, agent_name, f"timeout {timeout}s",
-                             error_type="TimeoutError")
+                             error_type="AgentTimeout")
         except Exception as e:
             tb = traceback.format_exc()
             logger.error(f"[{agent_name}] exception: {e}\n{tb}")
@@ -47,7 +50,10 @@ def safe_node(fn: Callable, agent_name: str) -> Callable:
     return wrapper
 
 
-TRANSIENT_ERRORS = {"TimeoutError", "ConnectionError", "RateLimitError", "asyncio.TimeoutError"}
+# RateLimitError: service is healthy, just throttling — retry later, stay normal.
+# TimeoutError: HTTP timeout raised inside an agent (tool-level) — may recover.
+# ConnectionError and AgentTimeout are not transient: the service is down or hung.
+TRANSIENT_ERRORS = {"TimeoutError", "RateLimitError"}
 
 
 def _escalate(state: dict, agent_name: str, reason: str, error_type: str = "unknown") -> dict:

@@ -38,12 +38,14 @@ class TestEscalate:
         result = _escalate(state, "geo_agent", "oops", error_type="ValueError")
         assert "geo_agent" in result["agent_history"]
 
-    def test_connection_error_is_transient(self):
+    def test_connection_error_degrades(self):
+        # ConnectionError means the service is down — degrade immediately.
         state = {"execution_mode": "normal"}
         result = _escalate(state, "geo_agent", "conn reset", error_type="ConnectionError")
-        assert result["execution_mode"] == "normal"
+        assert result["execution_mode"] == "degraded"
 
     def test_transient_errors_set_covers_key_types(self):
         assert "TimeoutError" in TRANSIENT_ERRORS
-        assert "ConnectionError" in TRANSIENT_ERRORS
         assert "RateLimitError" in TRANSIENT_ERRORS
+        # ConnectionError is no longer transient: a downed service should degrade.
+        assert "ConnectionError" not in TRANSIENT_ERRORS
