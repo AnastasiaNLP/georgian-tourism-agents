@@ -25,15 +25,16 @@ class AgentRegistry:
         from agents.response.agent import response_agent_node
         from agents.consultation.agent import consultation_agent_node
         from agents.revision.agent import revision_agent_node
+        from agents.error_handler import safe_node
 
         self._agents = {
-            "search_agent": search_agent_node,
-            "geo_agent": geo_agent_node,
-            "planning_agent": planning_agent_node,
-            "validation_agent": validation_agent_node,
-            "response_agent": response_agent_node,
-            "consultation_agent": consultation_agent_node,
-            "revision_agent": revision_agent_node,
+            "search_agent":       safe_node(search_agent_node,       "search_agent"),
+            "geo_agent":          safe_node(geo_agent_node,          "geo_agent"),
+            "planning_agent":     safe_node(planning_agent_node,     "planning_agent"),
+            "validation_agent":   safe_node(validation_agent_node,   "validation_agent"),
+            "response_agent":     safe_node(response_agent_node,     "response_agent"),
+            "consultation_agent": safe_node(consultation_agent_node, "consultation_agent"),
+            "revision_agent":     safe_node(revision_agent_node,     "revision_agent"),
         }
         self._initialized = True
         logger.info("AgentRegistry: %d agent nodes ready", len(self._agents))

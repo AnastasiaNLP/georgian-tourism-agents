@@ -28,6 +28,7 @@ class OrchestratorAgent:
             api_key=settings.anthropic_api_key,
             max_tokens=1000,
             temperature=0.0,
+            timeout=30,
         )
         self.system_prompt = load_prompt("orchestrator")
         logger.info("OrchestratorAgent classifier initialized (Claude Haiku)")

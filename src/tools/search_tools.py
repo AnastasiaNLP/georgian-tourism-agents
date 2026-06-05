@@ -99,6 +99,7 @@ def search_qdrant(
     client = QdrantClient(
         url=settings.qdrant_url,
         api_key=settings.qdrant_api_key,
+        timeout=10,
     )
 
     collection_name = settings.collection_name
@@ -264,6 +265,7 @@ def get_place_details(place_id: str) -> dict:
     client = QdrantClient(
         url=settings.qdrant_url,
         api_key=settings.qdrant_api_key,
+        timeout=10,
     )
 
     collection_name = settings.collection_name
