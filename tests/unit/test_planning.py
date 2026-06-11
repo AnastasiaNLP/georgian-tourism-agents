@@ -166,6 +166,138 @@ async def test_planning_agent_uses_trip_parameters_region_when_search_context_ab
 
 
 @pytest.mark.asyncio
+async def test_planning_agent_injects_past_trips_into_prompt():
+    """When retrieve_episodes returns summaries, the prompt must include PAST TRIPS block."""
+    from unittest.mock import AsyncMock as _AsyncMock
+    captured_prompts: list[str] = []
+
+    fake_episodes = [{"task": "trip to Kakheti", "plan_summary": "3-day wine tour in Telavi"}]
+    mock_mm = _AsyncMock()
+    mock_mm.retrieve_episodes = _AsyncMock(return_value=fake_episodes)
+
+    class _FakeLLM:
+        async def ainvoke(self, prompt, config=None):
+            captured_prompts.append(str(prompt))
+            return MagicMock(content='{"days":[{"day":1,"location":"Adjara",'
+                             '"activities":[{"name":"Beach","duration_hours":2,'
+                             '"distance_km":5}],"total_distance_km":5,'
+                             '"total_driving_hours":0}],'
+                             '"total_days":1,"pace":"moderate","summary":"ok"}')
+
+    class _FakeTracker:
+        def __init__(self, **kw): pass
+
+    with patch("langchain_openai.ChatOpenAI", return_value=_FakeLLM()), \
+         patch("monitoring.token_tracker.TokenTracker", _FakeTracker), \
+         patch("monitoring.token_tracker.merge_budget", lambda b, t: b), \
+         patch("src.memory.memory_manager.get_memory_manager", return_value=mock_mm):
+        from agents.planning.agent import planning_agent_node
+        await planning_agent_node({
+            "request_id": "past-trips-test",
+            "user_id": "u1",
+            "user_query": "plan my Adjara trip",
+            "user_language": "en",
+            "enriched_places": _make_places(),
+            "search_results": [],
+            "distance_matrix": {},
+            "trip_parameters": {"region": "Adjara", "days": 1, "pace": "moderate"},
+            "agent_history": [],
+            "errors": [],
+            "budget_state": {},
+        })
+
+    assert captured_prompts, "LLM must be called"
+    prompt_text = captured_prompts[0]
+    assert "PAST TRIPS" in prompt_text, "Prompt must contain PAST TRIPS block"
+    assert "Kakheti" in prompt_text, "Episode summary must appear in prompt"
+    mock_mm.retrieve_episodes.assert_awaited_once_with("u1", "plan my Adjara trip", top_k=3)
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_no_past_trips_block_when_no_user_id():
+    """Anonymous requests (no user_id) must not call retrieve_episodes or add PAST TRIPS."""
+    from unittest.mock import AsyncMock as _AsyncMock
+    captured_prompts: list[str] = []
+
+    mock_mm = _AsyncMock()
+
+    class _FakeLLM:
+        async def ainvoke(self, prompt, config=None):
+            captured_prompts.append(str(prompt))
+            return MagicMock(content='{"days":[{"day":1,"location":"Tbilisi",'
+                             '"activities":[{"name":"Old Town","duration_hours":3,'
+                             '"distance_km":2}],"total_distance_km":2,'
+                             '"total_driving_hours":0}],'
+                             '"total_days":1,"pace":"moderate","summary":"ok"}')
+
+    class _FakeTracker:
+        def __init__(self, **kw): pass
+
+    with patch("langchain_openai.ChatOpenAI", return_value=_FakeLLM()), \
+         patch("monitoring.token_tracker.TokenTracker", _FakeTracker), \
+         patch("monitoring.token_tracker.merge_budget", lambda b, t: b), \
+         patch("src.memory.memory_manager.get_memory_manager", return_value=mock_mm):
+        from agents.planning.agent import planning_agent_node
+        await planning_agent_node({
+            "request_id": "no-past-trips-test",
+            "user_query": "Tbilisi 1 day",
+            "user_language": "en",
+            "enriched_places": _make_places(),
+            "search_results": [],
+            "distance_matrix": {},
+            "trip_parameters": {"region": "Tbilisi", "days": 1, "pace": "moderate"},
+            "agent_history": [],
+            "errors": [],
+            "budget_state": {},
+        })
+
+    assert captured_prompts, "LLM must be called"
+    assert "PAST TRIPS" not in captured_prompts[0]
+    mock_mm.retrieve_episodes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_episode_failure_does_not_break_planning():
+    """If retrieve_episodes raises, planning_agent must still produce an itinerary."""
+    from unittest.mock import AsyncMock as _AsyncMock
+    mock_mm = _AsyncMock()
+    mock_mm.retrieve_episodes = _AsyncMock(side_effect=ConnectionError("Qdrant down"))
+
+    class _FakeLLM:
+        async def ainvoke(self, prompt, config=None):
+            return MagicMock(content='{"days":[{"day":1,"location":"Adjara",'
+                             '"activities":[{"name":"Beach","duration_hours":2,'
+                             '"distance_km":5}],"total_distance_km":5,'
+                             '"total_driving_hours":0}],'
+                             '"total_days":1,"pace":"moderate","summary":"ok"}')
+
+    class _FakeTracker:
+        def __init__(self, **kw): pass
+
+    with patch("langchain_openai.ChatOpenAI", return_value=_FakeLLM()), \
+         patch("monitoring.token_tracker.TokenTracker", _FakeTracker), \
+         patch("monitoring.token_tracker.merge_budget", lambda b, t: b), \
+         patch("src.memory.memory_manager.get_memory_manager", return_value=mock_mm):
+        from agents.planning.agent import planning_agent_node
+        result = await planning_agent_node({
+            "request_id": "ep-fail-test",
+            "user_id": "u1",
+            "user_query": "Adjara 2 days",
+            "user_language": "en",
+            "enriched_places": _make_places(),
+            "search_results": [],
+            "distance_matrix": {},
+            "trip_parameters": {"region": "Adjara", "days": 1, "pace": "moderate"},
+            "agent_history": [],
+            "errors": [],
+            "budget_state": {},
+        })
+
+    assert result.get("raw_itinerary"), "Planning must succeed despite episode retrieval failure"
+    assert "planning_agent" in result.get("agent_history", [])
+
+
+@pytest.mark.asyncio
 async def test_planning_agent_search_context_region_takes_priority():
     """search_context.region overrides trip_parameters.region when both are present."""
     captured_prompts: list[str] = []

@@ -134,3 +134,78 @@ async def test_aclose_noop_when_no_client():
     mm = _make_manager()
     assert mm._async_qdrant is None
     await mm.aclose()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# memory_load_node — episode retrieval wired into graph node
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_memory_load_node_loads_profile():
+    """memory_load_node must load profile and store it in user_memory."""
+    from graph.main_graph import memory_load_node
+
+    fake_profile = {"user_id": "u1", "visited_places": ["Batumi"], "past_trips": []}
+    mock_mm = AsyncMock()
+    mock_mm.load_profile = AsyncMock(return_value=dict(fake_profile))
+
+    state = {
+        "request_id": "mem-load-test",
+        "user_id": "u1",
+        "user_query": "plan my Georgia trip",
+        "execution_mode": "normal",
+        "agent_history": [],
+        "errors": [],
+    }
+
+    with patch("src.memory.memory_manager.get_memory_manager", return_value=mock_mm):
+        result = await memory_load_node(state)
+
+    mock_mm.load_profile.assert_awaited_once_with("u1")
+    assert result["user_memory"]["visited_places"] == ["Batumi"]
+
+
+@pytest.mark.asyncio
+async def test_memory_load_node_defers_episode_retrieval():
+    """memory_load_node must NOT call retrieve_episodes — retrieval is deferred to planning_agent."""
+    from graph.main_graph import memory_load_node
+
+    mock_mm = AsyncMock()
+    mock_mm.load_profile = AsyncMock(return_value={"user_id": "u1"})
+
+    state = {
+        "request_id": "defer-test",
+        "user_id": "u1",
+        "user_query": "Adjara 2 days",
+        "execution_mode": "normal",
+        "agent_history": [],
+        "errors": [],
+    }
+
+    with patch("src.memory.memory_manager.get_memory_manager", return_value=mock_mm):
+        await memory_load_node(state)
+
+    mock_mm.retrieve_episodes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_memory_load_node_anonymous_skips_profile():
+    """Anonymous requests (no user_id) must return user_memory=None without calling memory manager."""
+    from graph.main_graph import memory_load_node
+
+    mock_mm = AsyncMock()
+
+    state = {
+        "request_id": "anon-test",
+        "user_id": None,
+        "user_query": "plan my Georgia trip",
+        "execution_mode": "normal",
+        "agent_history": [],
+        "errors": [],
+    }
+
+    with patch("src.memory.memory_manager.get_memory_manager", return_value=mock_mm):
+        result = await memory_load_node(state)
+
+    mock_mm.load_profile.assert_not_awaited()
+    assert result["user_memory"] is None

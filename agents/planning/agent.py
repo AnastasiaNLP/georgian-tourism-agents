@@ -52,10 +52,30 @@ async def planning_agent_node(state: dict) -> dict:
         errors = state.get("errors") or []
         retry_note = f"\n\nPREVIOUS ATTEMPT ISSUES: {errors[-2:]}. Make a simpler plan."
 
+    user_id = state.get("user_id")
+    episode_summaries: list[str] = []
+    if user_id:
+        try:
+            from src.memory.memory_manager import get_memory_manager
+            mm = get_memory_manager()
+            episodes = await mm.retrieve_episodes(user_id, user_query, top_k=3)
+            episode_summaries = [
+                f"{ep.get('task', '')} → {ep.get('plan_summary', '')}".strip(" →")
+                for ep in episodes
+                if ep.get("task") or ep.get("plan_summary")
+            ]
+        except Exception as ep_exc:
+            logger.warning(f"[{request_id}] planning_agent: episode retrieval failed: {ep_exc}")
+
+    past_trips_block = ""
+    if episode_summaries:
+        lines = "\n".join(f"- {s}" for s in episode_summaries[:3])
+        past_trips_block = f"\nPAST TRIPS (context — avoid exact repetition unless requested):\n{lines}"
+
     prompt = f"""Build a {days}-day travel itinerary.
 
 REQUEST: {user_query}
-REGION: {region} | PACE: {pace} | MAX: {max_km} km/day, {max_acts} activities/day
+REGION: {region} | PACE: {pace} | MAX: {max_km} km/day, {max_acts} activities/day{past_trips_block}
 
 {places_block}
 
