@@ -12,13 +12,22 @@ from langchain_core.tools import tool
 from typing import Optional
 from config.settings import get_settings
 
+# Georgia centroid — default ORS focus point when no region-specific hint is available.
+# Defined once here; imported by tool_cache and geo_agent to avoid silent drift.
+GEO_FOCUS_LAT: float = 41.9
+GEO_FOCUS_LON: float = 44.0
+
 
 # ============================================================================
 # Tool 4: Geocode City
 # ============================================================================
 
 @tool
-def geocode_city(city: str) -> dict:
+def geocode_city(
+    city: str,
+    focus_lat: float = GEO_FOCUS_LAT,
+    focus_lon: float = GEO_FOCUS_LON,
+) -> dict:
     """Get coordinates for a place name using OpenRouteService.
 
     Args:
@@ -26,6 +35,10 @@ def geocode_city(city: str) -> dict:
               Examples: "Batumi Botanical Garden, Batumi"
                         "Europe Square, Batumi"
                         "Mestia"
+        focus_lat: Latitude hint for ORS ranking (default: Georgia centroid).
+                   Pass the region centroid to reduce hallucination for
+                   mountain/waterfall objects far from the country centre.
+        focus_lon: Longitude hint for ORS ranking (default: Georgia centroid).
 
     Returns:
         {"lat": float, "lon": float, "display_name": str}
@@ -42,10 +55,10 @@ def geocode_city(city: str) -> dict:
     params = {
         "api_key": ORS_API_KEY,
         "text": city,
-        "boundary.country": "GE",   # Limit to Georgia
-        "focus.point.lat": 41.9,    # Georgia centroid — biases results toward Georgia
-        "focus.point.lon": 44.0,    # when boundary.country has no exact match
-        "size": 3,                  # Fetch top 3, pick first within Georgia bbox
+        "boundary.country": "GE",      # Limit to Georgia
+        "focus.point.lat": focus_lat,  # Region-specific hint — reduces hallucination
+        "focus.point.lon": focus_lon,  # for mountain/waterfall objects far from centroid
+        "size": 3,                     # Fetch top 3, pick first within Georgia bbox
     }
 
     # Georgia bounding box for post-filter.

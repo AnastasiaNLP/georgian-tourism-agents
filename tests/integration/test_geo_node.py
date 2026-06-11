@@ -5,7 +5,7 @@ import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
 
-def mock_geocode(city: str) -> dict:
+def mock_geocode(city: str, focus_lat: float = 41.9, focus_lon: float = 44.0) -> dict:
     coords = {
         "Batumi":   {"lat": 41.6168, "lon": 41.6367},
         "Adjara":   {"lat": 41.7200, "lon": 41.8100},
@@ -99,6 +99,104 @@ async def test_geo_no_llm_calls(state_with_search):
     # budget_state is absent or llm_calls == 0.
     budget = result.get("budget_state", {})
     assert budget.get("llm_calls", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_geo_uses_payload_centroid_as_ors_focus_point():
+    """
+    When places have Qdrant payload coordinates, geo_agent must pass their centroid
+    as focus_lat/focus_lon to cached_geocode_city, not the Georgia centroid (41.9, 44.0).
+    """
+    # Two payload-coords places in Svaneti area (~43.0N, 42.9E)
+    state = {
+        "request_id": "focus-test",
+        "search_results": [
+            {
+                "name": "Ushguli Towers",
+                "location": "Svaneti",
+                "category": "historic",
+                "tags": [],
+                "description": "",
+                "metadata": {"lat": 43.12, "lon": 42.88},
+            },
+            {
+                "name": "Mestia Cathedral",
+                "location": "Svaneti",
+                "category": "church",
+                "tags": [],
+                "description": "",
+                "metadata": {"lat": 43.05, "lon": 42.73},
+            },
+            {
+                "name": "Svaneti Waterfall",  # no payload coords — should use ORS
+                "location": "Svaneti",
+                "category": "waterfall",
+                "tags": [],
+                "description": "",
+                "metadata": {},
+            },
+        ],
+        "search_context": {"region": "Svaneti"},
+    }
+
+    captured_focus: list[tuple] = []
+
+    async def _mock_geocode(city: str, focus_lat: float = 41.9, focus_lon: float = 44.0) -> dict:
+        captured_focus.append((focus_lat, focus_lon))
+        return {"lat": 43.05, "lon": 42.73}
+
+    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=_mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock,
+               return_value={"distance_km": 10.0, "duration_min": 15.0}):
+        from agents.geo.agent import geo_agent_node
+        await geo_agent_node(state)
+
+    # ORS was called exactly once (for the waterfall — others used payload coords)
+    assert len(captured_focus) == 1, f"Expected 1 ORS call, got {len(captured_focus)}"
+
+    used_lat, used_lon = captured_focus[0]
+    # Expected centroid of Ushguli (43.12, 42.88) and Mestia (43.05, 42.73)
+    expected_lat = (43.12 + 43.05) / 2  # ≈ 43.085
+    expected_lon = (42.88 + 42.73) / 2  # ≈ 42.805
+    assert abs(used_lat - expected_lat) < 0.01, f"focus_lat {used_lat:.3f} != centroid {expected_lat:.3f}"
+    assert abs(used_lon - expected_lon) < 0.01, f"focus_lon {used_lon:.3f} != centroid {expected_lon:.3f}"
+
+    # Centroid must not be the Georgia default
+    assert used_lat != 41.9 and used_lon != 44.0, "Must not fall back to Georgia centroid"
+
+
+@pytest.mark.asyncio
+async def test_geo_falls_back_to_georgia_centroid_when_no_payload_coords():
+    """When no places have payload coordinates, geo_agent falls back to Georgia centroid."""
+    state = {
+        "request_id": "focus-fallback-test",
+        "search_results": [
+            {
+                "name": "Mystery Waterfall",
+                "location": "Georgia",
+                "category": "waterfall",
+                "tags": [],
+                "description": "",
+                "metadata": {},  # no payload coords
+            },
+        ],
+    }
+
+    captured_focus: list[tuple] = []
+
+    async def _mock_geocode(city: str, focus_lat: float = 41.9, focus_lon: float = 44.0) -> dict:
+        captured_focus.append((focus_lat, focus_lon))
+        return {"lat": 42.0, "lon": 43.5}
+
+    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=_mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock,
+               return_value={"distance_km": 0.0, "duration_min": 0.0}):
+        from agents.geo.agent import geo_agent_node
+        await geo_agent_node(state)
+
+    assert len(captured_focus) == 1
+    used_lat, used_lon = captured_focus[0]
+    assert used_lat == 41.9 and used_lon == 44.0, "Must use Georgia centroid when no payload coords"
 
 
 @pytest.mark.asyncio

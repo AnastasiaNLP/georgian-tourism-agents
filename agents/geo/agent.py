@@ -14,6 +14,7 @@ import logging
 from langchain_core.tools import tool
 
 from agents.base import make_scratchpad
+from src.tools.geo_tools import GEO_FOCUS_LAT, GEO_FOCUS_LON
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,36 @@ async def _geo_enrich_places(state: dict) -> dict:
     # Region for bounding-box validation of geocoded coordinates
     region = (state.get("search_context") or {}).get("region", "Georgia")
 
+    # Compute ORS focus point from places that already have Qdrant payload coordinates.
+    # Using the centroid of known-good coordinates reduces hallucination for objects
+    # (mountains, waterfalls) whose names ORS resolves by global text-matching.
+    # Falls back to the Georgia centroid when no payload coordinates are present.
+    # Limitation: this is a mitigation, not a full fix — focus.point is a soft ORS
+    # ranking hint, so wrong-but-within-Georgia results are not caught by the bbox filter.
+    # Per-region bounding boxes would fully solve this but require region boundary data.
+    # Note: on multi-region results (e.g. Adjara + Kakheti in one query), the centroid
+    # drifts toward the country centre and may not help peripheral ORS-only places.
+    # Single-region queries (the normal case after upstream region filtering) are fine.
+    _payload_coords = [
+        (float((p.get("metadata") or {})["lat"]), float((p.get("metadata") or {})["lon"]))
+        for p in search_results
+        if isinstance((p.get("metadata") or {}).get("lat"), (int, float))
+        and isinstance((p.get("metadata") or {}).get("lon"), (int, float))
+        and _in_georgia(
+            float((p.get("metadata") or {})["lat"]),
+            float((p.get("metadata") or {})["lon"]),
+        )
+    ]
+    if _payload_coords:
+        focus_lat = sum(c[0] for c in _payload_coords) / len(_payload_coords)
+        focus_lon = sum(c[1] for c in _payload_coords) / len(_payload_coords)
+        logger.info(
+            f"[{request_id}] geo: focus_point=({focus_lat:.2f},{focus_lon:.2f}) "
+            f"from {len(_payload_coords)} Qdrant payload coords"
+        )
+    else:
+        focus_lat, focus_lon = GEO_FOCUS_LAT, GEO_FOCUS_LON
+
     # Step 1: geocode all places concurrently.
     async def geocode_place(place: dict) -> dict:
         name = place.get("name", "")
@@ -151,7 +182,7 @@ async def _geo_enrich_places(state: dict) -> dict:
         )
         query = f"{name}, {city}" if (name and city) else (name if name else loc)
         try:
-            result = await cached_geocode_city(query)
+            result = await cached_geocode_city(query, focus_lat=focus_lat, focus_lon=focus_lon)
             if "lat" in result and "lon" in result:
                 lat, lon = result["lat"], result["lon"]
                 if _in_georgia(lat, lon):

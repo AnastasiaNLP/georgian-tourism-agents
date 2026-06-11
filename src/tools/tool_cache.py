@@ -17,6 +17,7 @@ from typing import Any, Optional, Callable
 from functools import wraps
 import httpx
 from config.settings import get_settings
+from src.tools.geo_tools import GEO_FOCUS_LAT, GEO_FOCUS_LON
 
 logger = logging.getLogger(__name__)
 
@@ -303,12 +304,27 @@ async def cached_get_route(
         return {"error": str(e)}
 
 
-async def cached_geocode_city(city: str) -> dict:
+async def cached_geocode_city(
+    city: str,
+    focus_lat: float = GEO_FOCUS_LAT,
+    focus_lon: float = GEO_FOCUS_LON,
+) -> dict:
     """
     geocode_city wrapper with async Redis cache and sync retry.
+
+    focus_lat/focus_lon are passed to ORS as a proximity hint to reduce
+    hallucination for objects far from the Georgia centroid (e.g. Svaneti peaks).
+    Rounded to 1 decimal in the cache key — precise enough for regional grouping.
+    Trade-off: the same place queried with different focus points creates separate
+    cache entries. Correctness > hit-rate here (wrong coords are worse than a miss).
     """
     cache = get_cache()
-    cache_key = make_cache_key("geocode", city=city.lower().strip())
+    cache_key = make_cache_key(
+        "geocode",
+        city=city.lower().strip(),
+        flat=round(focus_lat, 1),
+        flon=round(focus_lon, 1),
+    )
 
     cached = await cache.get(cache_key)
     if cached is not None:
@@ -319,7 +335,7 @@ async def cached_geocode_city(city: str) -> dict:
 
     @with_retry(max_retries=2, base_delay=0.5)
     def _geocode():
-        return geocode_city.invoke({"city": city})
+        return geocode_city.invoke({"city": city, "focus_lat": focus_lat, "focus_lon": focus_lon})
 
     try:
         result = await asyncio.to_thread(_geocode)
