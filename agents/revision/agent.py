@@ -100,7 +100,8 @@ async def revision_agent_node(state: TravelPlanningState) -> dict[str, Any]:
         }
 
     prompt = get_revision_prompt()
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, timeout=60)
+    from config.settings import get_settings
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, timeout=60, api_key=get_settings().openai_api_key)
     structured_llm = llm.with_structured_output(Itinerary)
     chain = prompt | structured_llm
     tracker = TokenTracker(model="gpt-4o-mini")

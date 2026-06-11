@@ -2,6 +2,7 @@
 """Unit tests for agents/planning/agent.py."""
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 from agents.planning.agent import (
     _format_rich_places,
     _group_by_proximity,
@@ -108,3 +109,95 @@ class TestTryParseJson:
         result = _try_parse_json(text, "relaxed", 1)
         assert result["pace"] == "relaxed"
         assert "summary" in result
+
+
+# ---------------------------------------------------------------------------
+# planning_agent_node — region resolution (Debt AK)
+# ---------------------------------------------------------------------------
+
+def _make_places():
+    return [
+        {"name": "Ushguli", "location": "Svaneti", "category": "village",
+         "tags": ["nature"], "description": "Remote village",
+         "metadata": {"lat": 43.1, "lon": 42.9}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_uses_trip_parameters_region_when_search_context_absent():
+    """On REVISE, search_context is absent; region must come from trip_parameters."""
+    captured_prompts: list[str] = []
+
+    class _FakeLLM:
+        async def ainvoke(self, prompt, config=None):
+            captured_prompts.append(str(prompt))
+            return MagicMock(content='{"days":[{"day":1,"location":"Svaneti",'
+                             '"activities":[{"name":"Hike","duration_hours":2,'
+                             '"distance_km":5}],"total_distance_km":5,'
+                             '"total_driving_hours":0}],'
+                             '"total_days":1,"pace":"moderate","summary":"ok"}')
+
+    class _FakeTracker:
+        def __init__(self, **kw): pass
+
+    # ChatOpenAI, TokenTracker, merge_budget are lazy-imported inside the function —
+    # patch at their source modules, not at agents.planning.agent.
+    with patch("langchain_openai.ChatOpenAI", return_value=_FakeLLM()), \
+         patch("monitoring.token_tracker.TokenTracker", _FakeTracker), \
+         patch("monitoring.token_tracker.merge_budget", lambda b, t: b):
+        from agents.planning.agent import planning_agent_node
+        await planning_agent_node({
+            "request_id": "ak-test",
+            "user_query": "revise my Svaneti trip",
+            "user_language": "en",
+            "enriched_places": _make_places(),
+            "search_results": [],
+            "distance_matrix": {},
+            "trip_parameters": {"region": "Svaneti", "days": 1, "pace": "moderate"},
+            "agent_history": [],
+            "errors": [],
+            "budget_state": {},
+        })
+
+    assert captured_prompts, "LLM must be called"
+    assert "Svaneti" in captured_prompts[0], (
+        "Region from trip_parameters must appear in the prompt when search_context is absent"
+    )
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_search_context_region_takes_priority():
+    """search_context.region overrides trip_parameters.region when both are present."""
+    captured_prompts: list[str] = []
+
+    class _FakeLLM:
+        async def ainvoke(self, prompt, config=None):
+            captured_prompts.append(str(prompt))
+            return MagicMock(content='{"days":[{"day":1,"location":"Kakheti",'
+                             '"activities":[{"name":"Wine tour","duration_hours":3,'
+                             '"distance_km":10}],"total_distance_km":10,'
+                             '"total_driving_hours":0}],'
+                             '"total_days":1,"pace":"moderate","summary":"ok"}')
+
+    class _FakeTracker:
+        def __init__(self, **kw): pass
+
+    with patch("langchain_openai.ChatOpenAI", return_value=_FakeLLM()), \
+         patch("monitoring.token_tracker.TokenTracker", _FakeTracker), \
+         patch("monitoring.token_tracker.merge_budget", lambda b, t: b):
+        from agents.planning.agent import planning_agent_node
+        await planning_agent_node({
+            "request_id": "ak-test-2",
+            "user_query": "plan my Kakheti trip",
+            "user_language": "en",
+            "enriched_places": _make_places(),
+            "search_results": [],
+            "distance_matrix": {},
+            "search_context": {"region": "Kakheti"},
+            "trip_parameters": {"region": "Tbilisi", "days": 1, "pace": "moderate"},
+            "agent_history": [],
+            "errors": [],
+            "budget_state": {},
+        })
+
+    assert "Kakheti" in captured_prompts[0]

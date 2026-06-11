@@ -10,12 +10,40 @@ from state.contracts import QueryClassification
 logger = logging.getLogger(__name__)
 
 
+_QUESTION_STRINGS = {
+    "region": {
+        "ru": "Какой регион Грузии вас интересует?",
+        "ka": "რომელი რეგიონი გაინტერესებთ?",
+        "en": "Which region of Georgia do you want to focus on?",
+    },
+    "days": {
+        "ru": "На сколько дней вы планируете поездку?",
+        "ka": "რამდენი დღით გეგმავთ მოგზაურობას?",
+        "en": "How many days do you want to travel?",
+    },
+    "pace": {
+        "ru": "Какой темп предпочитаете: спокойный, умеренный или насыщенный?",
+        "ka": "რა ტემპს ანიჭებთ უპირატესობას: მშვიდს, ზომიერს თუ ინტენსიურს?",
+        "en": "Do you prefer a relaxed, moderate, or intensive pace?",
+    },
+}
+
+_INTRO = {
+    "ru": "Чтобы составить хороший маршрут, уточните, пожалуйста:",
+    "ka": "კარგი მარშრუტის შესადგენად, გთხოვთ დააზუსტოთ:",
+    "en": "To build a good itinerary, could you clarify:",
+}
+
+
 def _format_questions(questions: list[str], language: str) -> str:
-    if language.startswith("ru"):
-        intro = "Чтобы составить хороший маршрут, уточните, пожалуйста:"
-    else:
-        intro = "To build a good itinerary, could you clarify:"
+    lang = language[:2] if language else "en"
+    intro = _INTRO.get(lang, _INTRO["en"])
     return "\n".join([intro] + [f"- {q}" for q in questions])
+
+
+def _localize_question(key: str, language: str) -> str:
+    lang = language[:2] if language else "en"
+    return _QUESTION_STRINGS[key].get(lang, _QUESTION_STRINGS[key]["en"])
 
 
 async def consultation_agent_node(state: dict) -> dict:
@@ -34,13 +62,7 @@ async def consultation_agent_node(state: dict) -> dict:
         missing.append("pace")
 
     if missing and not has_plan:
-        questions = []
-        if "region" in missing:
-            questions.append("Which region of Georgia do you want to focus on?")
-        if "days" in missing:
-            questions.append("How many days do you want to travel?")
-        if "pace" in missing:
-            questions.append("Do you prefer a relaxed, moderate, or intensive pace?")
+        questions = [_localize_question(key, language) for key in missing]
 
         final_text = _format_questions(questions, language)
         classification = QueryClassification(

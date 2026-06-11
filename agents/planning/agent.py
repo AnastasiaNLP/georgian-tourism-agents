@@ -28,7 +28,11 @@ async def planning_agent_node(state: dict) -> dict:
     user_query = state.get("user_query", "")
     days = extract_trip_days(state)
     pace = extract_pace(state)
-    region = (state.get("search_context") or {}).get("region", "Georgia")
+    region = (
+        (state.get("search_context") or {}).get("region")
+        or (state.get("trip_parameters") or {}).get("region")
+        or "Georgia"
+    )
     history = state.get("agent_history") or []
     iteration = history.count("planning_agent")
 

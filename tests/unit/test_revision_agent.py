@@ -146,3 +146,45 @@ async def test_revision_agent_no_plan_routes_to_validation(monkeypatch):
     assert result["errors"] == ["revision_agent: no plan to revise"]
     assert result["raw_itinerary"] == {}
 
+
+@pytest.mark.asyncio
+async def test_revision_agent_chatOpenAI_receives_api_key(monkeypatch):
+    """ChatOpenAI must be constructed with api_key from settings."""
+    captured: dict = {}
+
+    def _capturing_llm(**kwargs):
+        captured.update(kwargs)
+        return _FakeLLM()
+
+    fake_chain = _FakeChain(_FakeRevisionResult({
+        "days": [{"day": 1, "location": "Tbilisi", "activities": [{"name": "walk"}],
+                  "total_distance_km": 0.0, "total_driving_hours": 0.0}],
+        "total_days": 1, "pace": "moderate", "summary": "ok",
+    }))
+
+    monkeypatch.setattr(revision_agent_module, "get_revision_prompt", lambda: _FakePrompt(fake_chain))
+    monkeypatch.setattr(revision_agent_module, "ChatOpenAI", _capturing_llm)
+    monkeypatch.setattr(revision_agent_module, "TokenTracker", _FakeTracker)
+    monkeypatch.setattr(revision_agent_module, "merge_budget",
+                        lambda budget_state, tracker: budget_state)
+
+    await revision_agent_node({
+        "request_id": "req-ak",
+        "current_plan_version": 0,
+        "current_plan": {"days": [{"day": 1, "location": "X", "activities": [],
+                                   "total_distance_km": 0.0, "total_driving_hours": 0.0}],
+                         "total_days": 1, "pace": "moderate"},
+        "raw_itinerary": {},
+        "feedback": "change it",
+        "trip_parameters": {"region": "Georgia", "days": 1, "pace": "moderate", "search_query": "q"},
+        "budget_state": {},
+        "agent_history": [],
+        "agent_scratchpad": {},
+        "router_trace": [],
+        "errors": [],
+        "has_current_plan": True,
+    })
+
+    assert "api_key" in captured, "ChatOpenAI must receive api_key kwarg"
+    assert captured["api_key"] is not None
+

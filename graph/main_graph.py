@@ -328,8 +328,15 @@ async def eval_node(state: TravelPlanningState) -> dict:
         )
 
         from langchain_openai import ChatOpenAI
+        from config.settings import get_settings
 
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, max_tokens=200)
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.0,
+            max_tokens=200,
+            api_key=get_settings().openai_api_key,
+            timeout=60,
+        )
         response = await llm.ainvoke(prompt)
         raw = response.content.strip()
 

@@ -147,8 +147,11 @@ async def plan_trip(request: PlanRequest, http_request: Request):
         try:
             result = await graph.ainvoke(state, config=config)
         except Exception as e:
-            logger.error(f"[{request_id}] Graph failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Graph error: {str(e)[:200]}")
+            logger.error(f"[{request_id}] Graph failed: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "internal_error", "request_id": request_id},
+            )
         finally:
             ACTIVE_REQUESTS.dec()
     finally:
