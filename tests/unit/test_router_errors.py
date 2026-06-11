@@ -31,13 +31,13 @@ async def test_graph_error_returns_request_id_not_traceback():
     guard_result = MagicMock()
     guard_result.passed = True
 
+    http_request.app.state.guardrails = MagicMock()
+    http_request.app.state.guardrails.check.return_value = guard_result
+
     mock_release = AsyncMock()
-    with patch("api.router._get_guardrails") as mock_guard, \
-         patch("api.router._derive_thread_id", return_value=_FIXED_THREAD_ID), \
+    with patch("api.router._derive_thread_id", return_value=_FIXED_THREAD_ID), \
          patch("api.router._try_acquire_thread", return_value="tok"), \
          patch("api.router._release_thread", mock_release):
-        mock_guard.return_value.check.return_value = guard_result
-
         with pytest.raises(HTTPException) as exc_info:
             await plan_trip(req, http_request)
 
@@ -48,7 +48,6 @@ async def test_graph_error_returns_request_id_not_traceback():
     assert "internal/module" not in str(detail)
     assert "secret_var" not in str(detail)
     assert "line 42" not in str(detail)
-    # Lock must be released even when the graph raises
     mock_release.assert_awaited_once_with(_FIXED_THREAD_ID, "tok")
 
 
@@ -65,18 +64,17 @@ async def test_graph_503_when_not_initialized():
     guard_result = MagicMock()
     guard_result.passed = True
 
+    http_request.app.state.guardrails = MagicMock()
+    http_request.app.state.guardrails.check.return_value = guard_result
+
     mock_release = AsyncMock()
-    with patch("api.router._get_guardrails") as mock_guard, \
-         patch("api.router._derive_thread_id", return_value=_FIXED_THREAD_ID), \
+    with patch("api.router._derive_thread_id", return_value=_FIXED_THREAD_ID), \
          patch("api.router._try_acquire_thread", return_value="tok"), \
          patch("api.router._release_thread", mock_release):
-        mock_guard.return_value.check.return_value = guard_result
-
         with pytest.raises(HTTPException) as exc_info:
             await plan_trip(req, http_request)
 
     assert exc_info.value.status_code == 503
-    # Lock must be released even on the 503 path
     mock_release.assert_awaited_once_with(_FIXED_THREAD_ID, "tok")
 
 

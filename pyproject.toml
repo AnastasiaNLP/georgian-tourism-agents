@@ -3,7 +3,9 @@
 # that break pytest 8.x (they're injected via shell's PYTHONPATH).
 [tool.pytest.ini_options]
 pythonpath = ["."]
-addopts = []
+# Online tests are excluded by default — they hit real APIs and cost money.
+# To run them: PYTHONPATH=. pytest -m online tests/online/
+addopts = ["-m", "not online"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [

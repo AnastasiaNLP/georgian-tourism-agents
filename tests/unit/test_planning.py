@@ -112,7 +112,7 @@ class TestTryParseJson:
 
 
 # ---------------------------------------------------------------------------
-# planning_agent_node — region resolution (Debt AK)
+# planning_agent_node — region resolution
 # ---------------------------------------------------------------------------
 
 def _make_places():

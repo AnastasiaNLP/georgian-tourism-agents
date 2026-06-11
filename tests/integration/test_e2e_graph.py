@@ -5,7 +5,6 @@ Covers: CONSULT (missing params), PLAN (full pipeline), REVISE.
 """
 from __future__ import annotations
 
-import json
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
@@ -66,12 +65,6 @@ def _make_itinerary(days: int = 2) -> Itinerary:
         pace="moderate",
         summary=f"Test {days}-day Adjara trip",
     )
-
-
-def _llm_json_response(itinerary: Itinerary) -> MagicMock:
-    mock = MagicMock()
-    mock.content = itinerary.model_dump_json()
-    return mock
 
 
 _FAKE_PLACES = [
@@ -147,10 +140,27 @@ async def test_e2e_consult_missing_params(graph, base_state):
 async def test_e2e_plan_full_pipeline(graph, plan_state):
     """
     PLAN flow with all external calls mocked.
-    Verifies agent_history order and that raw_itinerary is populated.
+    planning_agent uses direct llm.ainvoke → patch langchain_openai.ChatOpenAI (lazy import).
+    response_agent uses module-level import → patch agents.response.agent.ChatOpenAI.
+    Verifies correct agent execution order (AT) and that each LLM was actually called (AU).
     """
-    itinerary = _make_itinerary(days=2)
-    llm_resp = _llm_json_response(itinerary)
+    plan_itinerary = _make_itinerary(days=2)
+    # planning_agent parses response.content as itinerary JSON
+    plan_json = plan_itinerary.model_dump_json()
+
+    # planning_agent: lazy import from langchain_openai
+    mock_plan_response = MagicMock()
+    mock_plan_response.content = plan_json
+    mock_plan_llm = MagicMock()
+    mock_plan_llm.ainvoke = AsyncMock(return_value=mock_plan_response)
+    mock_planning_cls = MagicMock(return_value=mock_plan_llm)
+
+    # response_agent: module-level import — must patch agents.response.agent.ChatOpenAI
+    mock_resp_msg = MagicMock()
+    mock_resp_msg.content = "Test Adjara travel response"
+    mock_resp_llm = MagicMock()
+    mock_resp_llm.ainvoke = AsyncMock(return_value=mock_resp_msg)
+    mock_response_cls = MagicMock(return_value=mock_resp_llm)
 
     with (
         patch(
@@ -161,18 +171,27 @@ async def test_e2e_plan_full_pipeline(graph, plan_state):
         patch("src.tools.tool_cache.cached_search_qdrant", new_callable=AsyncMock, return_value=_FAKE_PLACES),
         patch("src.tools.tool_cache.cached_geocode_city", new_callable=AsyncMock, return_value=_FAKE_GEOCODE),
         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock, return_value=_FAKE_ROUTE),
-        patch(
-            "langchain_openai.ChatOpenAI.ainvoke",
-            new_callable=AsyncMock,
-            return_value=llm_resp,
-        ),
+        patch("langchain_openai.ChatOpenAI", mock_planning_cls),
+        patch("agents.response.agent.ChatOpenAI", mock_response_cls),
     ):
         config = {"configurable": {"thread_id": "e2e-plan-1"}}
         result = await graph.ainvoke(plan_state, config=config)
 
+    # AT: agents must run in the correct pipeline order
     history = result.get("agent_history", [])
     for agent in ("search_agent", "geo_agent", "planning_agent", "validation_agent", "response_agent"):
         assert agent in history, f"Expected {agent} in agent_history, got {history}"
+    assert history.index("search_agent") < history.index("geo_agent")
+    assert history.index("geo_agent") < history.index("planning_agent")
+    assert history.index("planning_agent") < history.index("validation_agent")
+    assert history.index("validation_agent") < history.index("response_agent")
+
+    # AU: each LLM was actually instantiated and invoked — routing bugs leave these uncalled
+    # assumes ENABLE_EVAL=False; eval_node shares this patch and would make it called_twice
+    mock_planning_cls.assert_called_once()         # planning_agent created ChatOpenAI
+    mock_plan_llm.ainvoke.assert_called_once()     # planning_agent called ainvoke
+    mock_response_cls.assert_called_once()         # response_agent created ChatOpenAI
+    mock_resp_llm.ainvoke.assert_called_once()     # response_agent called ainvoke
 
     assert result.get("raw_itinerary", {}).get("days"), "Expected populated itinerary"
     assert result.get("final_response"), "Expected non-empty final response"
@@ -185,13 +204,14 @@ async def test_e2e_plan_full_pipeline(graph, plan_state):
 @pytest.mark.asyncio
 async def test_e2e_revise_skips_search_and_geo(graph):
     """
-    REVISE flow: existing plan in state, user asks to change pace.
+    REVISE flow: existing 1-day plan revised to 2 days.
     revision_agent must run; search_agent and geo_agent must NOT run.
+    raw_itinerary must reflect the revision (AV: day count changes from 1 to 2).
     """
     existing = _make_itinerary(days=1)
 
     state = create_initial_state(
-        user_query="Сделай темп более расслабленным",
+        user_query="Добавь ещё один день",
         request_id="e2e-revise-1",
         user_language="ru",
     )
@@ -199,25 +219,29 @@ async def test_e2e_revise_skips_search_and_geo(graph):
     state["current_plan"] = existing.model_dump()
     state["current_plan_version"] = 1
 
-    revised = _make_itinerary(days=1)
+    # AV: revised plan is structurally different — 2 days instead of 1
+    revised = _make_itinerary(days=2)
 
-    mock_llm = MagicMock()
-    mock_structured = MagicMock()
-    mock_structured.ainvoke = AsyncMock(return_value=revised)
-    mock_llm.with_structured_output = MagicMock(return_value=mock_structured)
+    # revision_agent: module-level import → patch agents.revision.agent.ChatOpenAI
+    # uses prompt | with_structured_output chain; LangChain wraps the AsyncMock as RunnableLambda
+    mock_rev_chain = AsyncMock(return_value=revised)
+    mock_rev_llm = MagicMock()
+    mock_rev_llm.with_structured_output = MagicMock(return_value=mock_rev_chain)
+
+    # response_agent: module-level import → patch agents.response.agent.ChatOpenAI
+    mock_resp_msg = MagicMock()
+    mock_resp_msg.content = "Your revised trip plan is ready"
+    mock_resp_llm = MagicMock()
+    mock_resp_llm.ainvoke = AsyncMock(return_value=mock_resp_msg)
 
     with (
         patch(
             "orchestrator.orchestrator.OrchestratorAgent.classify",
             new_callable=AsyncMock,
-            return_value=_make_classification("REVISE", region="Adjara", days=1),
+            return_value=_make_classification("REVISE", region="Adjara", days=2),
         ),
-        patch("agents.revision.agent.ChatOpenAI", return_value=mock_llm),
-        patch(
-            "langchain_openai.ChatOpenAI.ainvoke",
-            new_callable=AsyncMock,
-            return_value=_llm_json_response(revised),
-        ),
+        patch("agents.revision.agent.ChatOpenAI", return_value=mock_rev_llm),
+        patch("agents.response.agent.ChatOpenAI", return_value=mock_resp_llm),
     ):
         config = {"configurable": {"thread_id": "e2e-revise-1"}}
         result = await graph.ainvoke(state, config=config)
@@ -228,3 +252,10 @@ async def test_e2e_revise_skips_search_and_geo(graph):
     assert "response_agent" in history
     assert "search_agent" not in history, f"REVISE must not trigger search, got {history}"
     assert "geo_agent" not in history, f"REVISE must not trigger geo, got {history}"
+
+    # AV: revision must produce a structurally different itinerary (2 days, not 1)
+    raw = result.get("raw_itinerary") or {}
+    assert len(raw.get("days", [])) == 2, (
+        f"Revision must change itinerary (expected 2 days, got {len(raw.get('days', []))})"
+    )
+    mock_rev_chain.assert_called_once()  # revision_agent actually invoked the LLM chain

@@ -1,15 +1,14 @@
 # tests/unit/test_search.py
-"""Unit tests for agents/search/agent.py deduplication and intent filtering."""
+"""Unit tests for agents/search/agent.py deduplication logic."""
 
 import pytest
-from agents.search.agent import _deduplicate_results, _filter_by_query_intent, _translate_query
+from agents.search.agent import _deduplicate_results
 
 
 class TestDeduplication:
     def test_ru_en_duplicates_removed(self, places_with_duplicates):
         result = _deduplicate_results(places_with_duplicates)
         names = [p["name"] for p in result]
-        # One of the two botanical garden entries should remain.
         botanical = [n for n in names if "botanical" in n.lower() or "ботанический" in n.lower()]
         assert len(botanical) == 1
 
@@ -19,7 +18,6 @@ class TestDeduplication:
             p for p in result
             if "botanical" in p["name"].lower() or "ботанический" in p["name"].lower()
         )
-        # The EN version is longer and should be kept.
         assert "Batumi Botanical Garden" == kept["name"]
 
     def test_non_duplicates_kept(self, places_with_duplicates):
@@ -41,16 +39,13 @@ class TestDeduplication:
              "score": 0.9, "description": "long " * 10},
             {"name": "Place B", "location": "Batumi", "category": "park",
              "score": 0.85, "description": "short"},
-            # Different location, not a duplicate.
             {"name": "Place C", "location": "Gonio", "category": "fortress",
              "score": 0.80, "description": "x"},
         ]
         result = _deduplicate_results(places)
-        # Place A and Place B have the same location, so one is removed.
         assert len(result) == 2
 
     def test_score_too_far_not_deduped(self):
-        """If score differs by more than 0.08 and location differs, keep both."""
         places = [
             {"name": "Park A", "category": "national park", "score": 0.95,
              "description": "x", "location": "Adjara"},
@@ -61,48 +56,21 @@ class TestDeduplication:
         assert len(result) == 2
 
 
-class TestIntentFilter:
-    def test_nature_query_boosts_nature(self):
-        places = [
-            {"name": "Museum", "category": "museum", "score": 0.9,
-             "tags": ["museum"], "description": "", "location": ""},
-            {"name": "National Park", "category": "national park", "score": 0.85,
-             "tags": ["nature", "hiking"], "description": "", "location": ""},
-        ]
-        result = _filter_by_query_intent(places, "природа и горы")
-        assert result[0]["name"] == "National Park"
-
-    def test_culture_query_boosts_museums(self):
-        places = [
-            {"name": "Beach", "category": "beach", "score": 0.9,
-             "tags": ["beach"], "description": "", "location": ""},
-            {"name": "History Museum", "category": "museum", "score": 0.85,
-             "tags": ["museum", "history"], "description": "", "location": ""},
-        ]
-        result = _filter_by_query_intent(places, "история и культура")
-        assert result[0]["name"] == "History Museum"
-
-    def test_no_keywords_unchanged(self, places_with_duplicates):
-        result = _filter_by_query_intent(places_with_duplicates, "Батуми 3 дня")
-        assert result == places_with_duplicates
-
-    def test_empty_query_unchanged(self, places_with_duplicates):
-        result = _filter_by_query_intent(places_with_duplicates, "")
-        assert result == places_with_duplicates
+def test_no_hardcoded_translation_or_intent_filter():
+    """Hardcoded Ru→En maps and keyword-based re-ranking must not exist in search agent."""
+    import agents.search.agent as m
+    assert not hasattr(m, "_translate_query"), \
+        "_translate_query (hardcoded Ru→En translation) must be removed"
+    assert not hasattr(m, "_filter_by_query_intent"), \
+        "_filter_by_query_intent (hardcoded keyword re-ranking) must be removed"
+    assert not hasattr(m, "_RU_CATEGORY_TO_EN"), \
+        "_RU_CATEGORY_TO_EN (hardcoded category dict) must be removed"
 
 
-class TestTranslateQuery:
-    def test_russian_nature_words(self):
-        result = _translate_query("природа и горы")
-        assert "nature" in result
-        assert "mountains" in result
-
-    def test_russian_culture_words(self):
-        result = _translate_query("музей и крепость")
-        assert "museum" in result
-        assert "fortress" in result
-
-    def test_english_unchanged(self):
-        result = _translate_query("hiking in mountains")
-        assert "hiking" in result
-        assert "mountains" in result
+def test_no_dead_web_tools():
+    """search_web and get_place_details were never wired — must not exist in search_tools."""
+    import src.tools.search_tools as m
+    assert not hasattr(m, "search_web"), \
+        "search_web was never called from any agent and must be removed"
+    assert not hasattr(m, "get_place_details"), \
+        "get_place_details was never called from any agent and must be removed"

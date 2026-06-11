@@ -75,7 +75,7 @@ async def test_safe_node_success_passes_through():
 
 @pytest.mark.asyncio
 async def test_safe_node_transient_error_stays_normal():
-    """First transient error in normal mode keeps execution_mode=normal."""
+    """First transient error in normal mode: execution_mode stays normal, agent recorded, error logged."""
     async def _transient(state: dict) -> dict:
         raise TimeoutError("transient")
 
@@ -83,6 +83,10 @@ async def test_safe_node_transient_error_stays_normal():
     result = await wrapped(_base_state())
     # TimeoutError is in TRANSIENT_ERRORS — first hit stays normal
     assert result["execution_mode"] == "normal"
+    # Agent must still appear in history so downstream routing can see it ran
+    assert "search_agent" in result["agent_history"]
+    # Error must be recorded so operators can observe what happened
+    assert result["errors"], "Transient error must be written to state['errors']"
 
 
 @pytest.mark.asyncio

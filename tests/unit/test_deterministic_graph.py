@@ -73,3 +73,12 @@ def test_orchestrator_params_are_merged_from_steps():
         "days": 2,
         "pace": "relaxed",
     }
+
+
+def test_run_graph_removed():
+    """run_graph() and _cached_graph were dead code — must not exist in main_graph."""
+    import graph.main_graph as m
+    assert not hasattr(m, "run_graph"), \
+        "run_graph() was dead code and must be removed"
+    assert not hasattr(m, "_cached_graph"), \
+        "_cached_graph was dead code and must be removed"

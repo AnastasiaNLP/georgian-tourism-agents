@@ -1,4 +1,4 @@
-"""Unit tests for memory_manager pure functions (Debt M) and intent guard (Debt Z)."""
+"""Unit tests for memory_manager pure functions and intent guard."""
 import time
 import pytest
 
@@ -117,7 +117,7 @@ def test_merge_updated_at_changes():
 
 
 # ---------------------------------------------------------------------------
-# extract_profile_update — intent guard (Debt Z)
+# extract_profile_update — intent guard
 # ---------------------------------------------------------------------------
 
 def _make_state(intent: str, with_itinerary: bool = True) -> dict:
