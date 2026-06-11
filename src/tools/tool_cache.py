@@ -134,21 +134,6 @@ class RedisCache:
             logger.debug(f"Cache RELEASE_LOCK failed for {key}: {e}")
             return False
 
-    async def delete(self, key: str) -> bool:
-        """Delete a cache key."""
-        if not self._enabled:
-            return False
-        try:
-            await self._get_client().post(
-                f"{self.url}/del/{key}",
-                headers=self._headers(),
-            )
-            return True
-        except Exception as e:
-            logger.debug(f"Cache DEL failed for {key}: {e}")
-            return False
-
-
 # Singleton
 _cache = RedisCache()
 
@@ -230,32 +215,6 @@ def with_retry(max_retries: int = 2, base_delay: float = 0.5):
                         f"retrying in {delay:.1f}s: {e}"
                     )
                     time.sleep(delay)
-            raise last_exc
-        return wrapper
-    return decorator
-
-
-def with_async_retry(max_retries: int = 2, base_delay: float = 0.5):
-    """
-    Retry decorator for async functions.
-    """
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            last_exc = None
-            for attempt in range(max_retries + 1):
-                try:
-                    return await func(*args, **kwargs)
-                except Exception as e:
-                    last_exc = e
-                    if not _is_tool_retryable(e) or attempt == max_retries:
-                        raise
-                    delay = base_delay * (2 ** attempt)
-                    logger.warning(
-                        f"Tool {func.__name__} failed (attempt {attempt+1}/{max_retries+1}), "
-                        f"retrying in {delay:.1f}s: {e}"
-                    )
-                    await asyncio.sleep(delay)
             raise last_exc
         return wrapper
     return decorator

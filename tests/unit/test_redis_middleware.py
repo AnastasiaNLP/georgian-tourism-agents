@@ -40,7 +40,6 @@ def _make_cache(enabled: bool, timestamps=None, acquire_token: str | None = "tes
     cache.set = AsyncMock(return_value=True)
     cache.acquire_lock = AsyncMock(return_value=acquire_token)
     cache.release_lock = AsyncMock(return_value=True)
-    cache.delete = AsyncMock(return_value=True)
     return cache
 
 
@@ -206,7 +205,6 @@ async def test_thread_lock_redis_release_uses_cas():
         await _release_thread("thread-abc", "mytoken")
 
     cache.release_lock.assert_awaited_once_with("threadlock:thread-abc", "mytoken")
-    cache.delete.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

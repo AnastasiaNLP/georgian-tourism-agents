@@ -82,6 +82,18 @@ class TestEnforcePlanRules:
             assert agents[i] != agents[i + 1]
 
 
+def test_detect_region_no_hardcoded_keywords():
+    """_detect_region must read from config/georgia_regions.json, not from a hardcoded dict."""
+    import inspect
+    from orchestrator.fallback_rules import _detect_region
+
+    src = inspect.getsource(_detect_region)
+    assert "region_keywords" not in src, (
+        "_detect_region must not use a hardcoded region_keywords dict (golden rule: no hardcoded regions)"
+    )
+    assert "load_regions" in src, "_detect_region must delegate to load_regions()"
+
+
 class TestCreateFallbackPlan:
     def test_planning_query_includes_geo(self):
         state = {"user_query": "Батуми 3 дня природа"}

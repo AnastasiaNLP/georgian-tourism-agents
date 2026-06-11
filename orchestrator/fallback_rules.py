@@ -264,28 +264,15 @@ def enforce_plan_rules(plan: OrchestratorPlan, state: dict) -> OrchestratorPlan:
 def _detect_region(query: str) -> str:
     """
     Detect the Georgian region from query keywords.
+    Reads region-to-keyword mapping from config/georgia_regions.json via load_regions().
     """
-    region_keywords = {
-        "Adjara":               ["batumi", "батуми", "adjara", "аджара", "kobuleti",
-                                  "кобулети", "gonio", "гонио", "black sea", "чёрное море"],
-        "Kakheti":              ["kakheti", "кахетия", "telavi", "телави", "sighnaghi",
-                                  "сигнахи", "wine", "вино", "kvareli", "квarel"],
-        "Mtskheta-Mtianeti":    ["kazbegi", "казбеги", "gergeti", "mtskheta", "мцхета",
-                                  "mountains", "горы", "dariali"],
-        "Svaneti":              ["svaneti", "сванетия", "mestia", "местиа", "ushguli",
-                                  "ушгули", "glacier", "ледник"],
-        "Imereti":              ["kutaisi", "кутаиси", "imereti", "имерети", "caves",
-                                  "пещер", "prometheus", "прометей", "gelati"],
-        "Samtskhe-Javakheti":   ["vardzia", "вардзия", "borjomi", "боржоми",
-                                  "akhaltsikhe", "ахалцихе", "rabati"],
-        "Tbilisi":              ["tbilisi", "тбилиси", "old town", "старый город",
-                                  "rustaveli", "руставели"],
-    }
+    from agents.geo_filter import load_regions
 
-    for region, keywords in region_keywords.items():
-        if any(kw in query for kw in keywords):
+    regions = load_regions()
+    query_lower = query.lower()
+    for region, keywords in regions.items():
+        if any(kw.lower() in query_lower for kw in keywords):
             return region
-
     return "Tbilisi"  # default
 
 
