@@ -12,7 +12,15 @@ _pool: Optional[AsyncConnectionPool] = None
 
 
 async def init_pool(conninfo: str) -> AsyncConnectionPool:
-    """Explicitly initialize pool with given conninfo. Called once from lifespan."""
+    """Explicitly initialize pool with given conninfo. Called once from lifespan.
+
+    kwargs mirror AsyncPostgresSaver.from_conn_string requirements:
+    - autocommit=True so checkpointer migrations and aput writes commit immediately
+      without relying on commit-on-return pool semantics.
+    - prepare_threshold=0 to match the saver's expected connection mode.
+    row_factory is intentionally left as the psycopg default (tuple) so that
+    memory_manager's row[0] access works; the saver sets dict_row per-cursor.
+    """
     global _pool
     if _pool is None:
         _pool = AsyncConnectionPool(
@@ -20,9 +28,10 @@ async def init_pool(conninfo: str) -> AsyncConnectionPool:
             min_size=1,
             max_size=5,
             open=False,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
         )
         await _pool.open()
-        logger.info("memory: AsyncConnectionPool opened (max_size=5)")
+        logger.info("memory: AsyncConnectionPool opened (max_size=5, autocommit=True)")
     return _pool
 
 

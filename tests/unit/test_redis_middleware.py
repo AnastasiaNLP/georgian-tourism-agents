@@ -141,6 +141,33 @@ async def test_rate_limit_fallback_blocks_over_limit():
     assert resp.status_code == 429
 
 
+@pytest.mark.asyncio
+async def test_rate_limit_fallback_prunes_stale_ips():
+    """IPs whose window is fully expired (stale or empty list) are evicted every 5 minutes."""
+    import middleware.rate_limit as m
+    from middleware.rate_limit import rate_limit_middleware
+
+    m._requests.clear()
+    m._warned_no_redis = True
+    # Force the prune timer to trigger immediately on the next request.
+    m._requests_last_prune = time.time() - 301
+
+    stale_ip = "7.7.7.7"
+    empty_ip = "6.6.6.6"
+    # Stale entry: last timestamp is 120 seconds ago (well outside the 60s window).
+    m._requests[stale_ip] = [time.time() - 120]
+    # Empty entry: all timestamps were pruned, but the key still exists in the dict.
+    m._requests[empty_ip] = []
+
+    cache = _make_cache(enabled=False)
+    with patch("middleware.rate_limit.get_cache", return_value=cache):
+        # Any fresh request triggers the sweep.
+        await rate_limit_middleware(_make_request(ip="5.5.5.5"), _call_next)
+
+    assert stale_ip not in m._requests, "Stale IP must be evicted from _requests"
+    assert empty_ip not in m._requests, "Empty-list IP must be evicted from _requests"
+
+
 # ---------------------------------------------------------------------------
 # Health probe exemption
 # ---------------------------------------------------------------------------

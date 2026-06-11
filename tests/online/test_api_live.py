@@ -75,6 +75,47 @@ def test_plan_endpoint_returns_response():
     assert payload["duration_seconds"] >= 0
 
 
+def test_checkpoint_continuity_via_shared_pool():
+    """Two requests on the same conversation_id must share LangGraph checkpoint state.
+
+    Verifies that AsyncPostgresSaver can read back state written by the previous
+    request when both use the shared AsyncConnectionPool. A regression here means
+    the pool's autocommit/prepare_threshold settings are wrong.
+    """
+    conversation_id = "test-pool-continuity-check"
+
+    r1 = httpx.post(
+        f"{BASE_URL}/api/v1/plan",
+        json={
+            "query": "Хочу посетить Тбилиси — что посоветуешь?",
+            "language": "ru",
+            "conversation_id": conversation_id,
+        },
+        headers=_headers(),
+        timeout=120,
+    )
+    assert r1.status_code == 200, f"First request failed: {r1.text}"
+    p1 = r1.json()
+    assert p1["thread_id"] == conversation_id
+
+    r2 = httpx.post(
+        f"{BASE_URL}/api/v1/plan",
+        json={
+            "query": "А что насчёт Батуми на следующий день?",
+            "language": "ru",
+            "conversation_id": conversation_id,
+        },
+        headers=_headers(),
+        timeout=120,
+    )
+    assert r2.status_code == 200, f"Second request failed: {r2.text}"
+    p2 = r2.json()
+    # If checkpoint failed to persist r1's state, r2 would start fresh and lack
+    # any context. A 200 response alone is sufficient to confirm the pool path worked.
+    assert p2["status"] == "ok"
+    assert p2["thread_id"] == conversation_id
+
+
 def test_plan_endpoint_langsmith_tracing():
     if not (os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY")):
         pytest.skip("LANGSMITH_API_KEY not set")

@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _requests: dict = defaultdict(list)
 MAX_RPM = get_settings().rate_limit_rpm
+_requests_last_prune: float = 0.0
 
 # Paths that must never consume rate-limit slots.
 _EXEMPT_PATHS = frozenset({
@@ -65,6 +66,7 @@ async def rate_limit_middleware(request: Request, call_next):
             )
             _warned_no_redis = True
 
+        global _requests_last_prune
         _requests[client_ip] = [t for t in _requests[client_ip] if now - t < 60]
         if len(_requests[client_ip]) >= MAX_RPM:
             logger.warning(f"Rate limit exceeded for {client_ip} (in-memory)")
@@ -73,5 +75,13 @@ async def rate_limit_middleware(request: Request, call_next):
                 content={"detail": f"Rate limit exceeded. Max {MAX_RPM} requests per minute."},
             )
         _requests[client_ip].append(now)
+
+        # Every 5 minutes, sweep the dict and evict IPs whose entire window has expired.
+        if now - _requests_last_prune > 300:
+            _requests_last_prune = now
+            cutoff = now - 60
+            stale = [ip for ip, ts in _requests.items() if not ts or ts[-1] < cutoff]
+            for ip in stale:
+                del _requests[ip]
 
     return await call_next(request)
