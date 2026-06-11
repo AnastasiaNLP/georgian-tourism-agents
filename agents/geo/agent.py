@@ -31,8 +31,8 @@ def geocode_city(city: str) -> dict:
         {"lat": float, "lon": float, "display_name": str}
         or {"error": str} if not found.
     """
-    from src.tools.tool_cache import cached_geocode_city
-    return cached_geocode_city(city)
+    from src.tools.geo_tools import geocode_city as _geocode
+    return _geocode.invoke({"city": city})
 
 
 @tool
@@ -48,8 +48,11 @@ def get_route(
         {"distance_km": float, "duration_min": float}
         or {"error": str} if route not found.
     """
-    from src.tools.tool_cache import cached_get_route
-    return cached_get_route(start_lon, start_lat, end_lon, end_lat)
+    from src.tools.geo_tools import get_route as _get_route
+    return _get_route.invoke({
+        "start_lon": start_lon, "start_lat": start_lat,
+        "end_lon": end_lon, "end_lat": end_lat,
+    })
 
 
 async def geo_agent_node(state: dict) -> dict:
@@ -103,7 +106,7 @@ async def _geo_enrich_places(state: dict) -> dict:
 
     Results are cached through cached_geocode_city and cached_get_route.
     """
-    from src.tools.tool_cache import cached_geocode_city, cached_get_route
+    from src.tools.tool_cache import cached_geocode_city, cached_get_route  # noqa: F401 (async)
 
     request_id = state.get("request_id", "unknown")
     search_results = state.get("search_results") or []
@@ -148,7 +151,7 @@ async def _geo_enrich_places(state: dict) -> dict:
         )
         query = f"{name}, {city}" if (name and city) else (name if name else loc)
         try:
-            result = cached_geocode_city(query)
+            result = await cached_geocode_city(query)
             if "lat" in result and "lon" in result:
                 lat, lon = result["lat"], result["lon"]
                 if _in_georgia(lat, lon):
@@ -183,7 +186,7 @@ async def _geo_enrich_places(state: dict) -> dict:
     async def get_distance(a: dict, b: dict) -> tuple:
         key = f"{a['name'][:25]}→{b['name'][:25]}"
         try:
-            result = cached_get_route(a["lon"], a["lat"], b["lon"], b["lat"])
+            result = await cached_get_route(a["lon"], a["lat"], b["lon"], b["lat"])
             if "distance_km" in result:
                 val = {"km": result["distance_km"], "hours": result["duration_min"] / 60}
                 return key, val

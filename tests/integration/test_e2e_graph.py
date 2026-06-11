@@ -158,9 +158,9 @@ async def test_e2e_plan_full_pipeline(graph, plan_state):
             new_callable=AsyncMock,
             return_value=_make_classification("PLAN", region="Adjara", days=2),
         ),
-        patch("src.tools.tool_cache.cached_search_qdrant", return_value=_FAKE_PLACES),
-        patch("src.tools.tool_cache.cached_geocode_city", return_value=_FAKE_GEOCODE),
-        patch("src.tools.tool_cache.cached_get_route", return_value=_FAKE_ROUTE),
+        patch("src.tools.tool_cache.cached_search_qdrant", new_callable=AsyncMock, return_value=_FAKE_PLACES),
+        patch("src.tools.tool_cache.cached_geocode_city", new_callable=AsyncMock, return_value=_FAKE_GEOCODE),
+        patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock, return_value=_FAKE_ROUTE),
         patch(
             "langchain_openai.ChatOpenAI.ainvoke",
             new_callable=AsyncMock,

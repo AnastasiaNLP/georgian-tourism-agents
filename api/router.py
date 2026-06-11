@@ -207,8 +207,8 @@ async def readiness(http_request: Request):
         if not cache.enabled:
             checks["redis"] = "disabled (no credentials)"
         else:
-            cache.set("health:ping", "pong", ttl_seconds=10)
-            val = cache.get("health:ping")
+            await cache.set("health:ping", "pong", ttl_seconds=10)
+            val = await cache.get("health:ping")
             checks["redis"] = "ok" if val == "pong" else f"unexpected value: {val}"
     except Exception as e:
         checks["redis"] = f"error: {str(e)[:80]}"

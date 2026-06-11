@@ -141,10 +141,12 @@ async def test_geo_agent_ors_failure_returns_places_without_coords():
     # so we patch the source module, not the agent module.
     with patch(
         "src.tools.tool_cache.cached_geocode_city",
+        new_callable=AsyncMock,
         side_effect=ConnectionError("ORS down"),
     ):
         with patch(
             "src.tools.tool_cache.cached_get_route",
+            new_callable=AsyncMock,
             side_effect=ConnectionError("ORS down"),
         ):
             result = await geo_agent_node(state)

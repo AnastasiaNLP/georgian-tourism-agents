@@ -83,9 +83,9 @@ async def test_full_pipeline_state_flow():
                          "estimated_cost_usd": 0.0},
     }
 
-    with patch("agents.search.agent._do_search", return_value=SEARCH_RESULTS), \
-         patch("src.tools.tool_cache.cached_geocode_city", side_effect=mock_geocode), \
-         patch("src.tools.tool_cache.cached_get_route", side_effect=mock_route), \
+    with patch("agents.search.agent._do_search", new_callable=AsyncMock, return_value=SEARCH_RESULTS), \
+         patch("src.tools.tool_cache.cached_geocode_city", new_callable=AsyncMock, side_effect=mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock, side_effect=mock_route), \
          patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock,
                return_value=mock_llm_response()):
 
@@ -134,8 +134,8 @@ async def test_geo_before_planning_enriched_data_used():
                          "estimated_cost_usd": 0.0},
     }
 
-    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=mock_geocode), \
-         patch("src.tools.tool_cache.cached_get_route", side_effect=mock_route):
+    with patch("src.tools.tool_cache.cached_geocode_city", new_callable=AsyncMock, side_effect=mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock, side_effect=mock_route):
         geo_out = await geo_agent_node(state)
 
     state_with_geo = {**state, **geo_out}

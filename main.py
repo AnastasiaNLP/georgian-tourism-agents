@@ -64,6 +64,9 @@ async def lifespan(app: FastAPI):
 
         yield
 
+    from src.tools.tool_cache import get_cache
+    await get_cache().aclose()
+
     from src.memory.db import close_pool
     await close_pool()
     logger.info("Shutdown complete")

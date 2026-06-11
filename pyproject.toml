@@ -1,3 +1,6 @@
+# Run tests with: PYTHONPATH="" .venv/bin/pytest ...
+# PYTHONPATH="" is required to isolate the venv from ROS Foxy plugins
+# that break pytest 8.x (they're injected via shell's PYTHONPATH).
 [tool.pytest.ini_options]
 pythonpath = ["."]
 addopts = []

@@ -2,7 +2,7 @@
 """Integration tests for geo_agent_node with a mocked ORS API."""
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 
 def mock_geocode(city: str) -> dict:
@@ -40,8 +40,8 @@ def state_with_search(places_geocoded):
 @pytest.mark.asyncio
 async def test_geo_enriches_with_lat_lon(state_with_search):
     """geo_agent_node adds lat/lon to places."""
-    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=mock_geocode), \
-         patch("src.tools.tool_cache.cached_get_route", side_effect=mock_route):
+    with patch("src.tools.tool_cache.cached_geocode_city", new_callable=AsyncMock, side_effect=mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock, side_effect=mock_route):
         from agents.geo.agent import geo_agent_node
         result = await geo_agent_node(state_with_search)
 
@@ -53,8 +53,8 @@ async def test_geo_enriches_with_lat_lon(state_with_search):
 @pytest.mark.asyncio
 async def test_geo_builds_distance_matrix(state_with_search):
     """geo_agent_node builds distance_matrix."""
-    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=mock_geocode), \
-         patch("src.tools.tool_cache.cached_get_route", side_effect=mock_route):
+    with patch("src.tools.tool_cache.cached_geocode_city", new_callable=AsyncMock, side_effect=mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock, side_effect=mock_route):
         from agents.geo.agent import geo_agent_node
         result = await geo_agent_node(state_with_search)
 
@@ -65,8 +65,8 @@ async def test_geo_builds_distance_matrix(state_with_search):
 @pytest.mark.asyncio
 async def test_geo_reverse_routes_added(state_with_search):
     """Reverse routes are added to distance_matrix."""
-    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=mock_geocode), \
-         patch("src.tools.tool_cache.cached_get_route", side_effect=mock_route):
+    with patch("src.tools.tool_cache.cached_geocode_city", new_callable=AsyncMock, side_effect=mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock, side_effect=mock_route):
         from agents.geo.agent import geo_agent_node
         result = await geo_agent_node(state_with_search)
 
@@ -91,8 +91,8 @@ async def test_geo_no_search_results_returns_error():
 @pytest.mark.asyncio
 async def test_geo_no_llm_calls(state_with_search):
     """geo_agent_node does not make LLM calls."""
-    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=mock_geocode), \
-         patch("src.tools.tool_cache.cached_get_route", side_effect=mock_route):
+    with patch("src.tools.tool_cache.cached_geocode_city", new_callable=AsyncMock, side_effect=mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock, side_effect=mock_route):
         from agents.geo.agent import geo_agent_node
         result = await geo_agent_node(state_with_search)
 
@@ -109,8 +109,8 @@ async def test_geo_partial_geocoding(state_with_search):
             return {"lat": 41.6168, "lon": 41.6367}
         return {"error": "not found"}
 
-    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=partial_geocode), \
-         patch("src.tools.tool_cache.cached_get_route", side_effect=mock_route):
+    with patch("src.tools.tool_cache.cached_geocode_city", new_callable=AsyncMock, side_effect=partial_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock, side_effect=mock_route):
         from agents.geo.agent import geo_agent_node
         result = await geo_agent_node(state_with_search)
 
