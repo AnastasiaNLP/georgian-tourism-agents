@@ -16,22 +16,36 @@ from monitoring.tracing import get_run_config
 from monitoring.metrics import ACTIVE_REQUESTS
 from state.schema import create_initial_state
 from config.settings import get_settings
+from src.tools.tool_cache import get_cache
 
 logger = logging.getLogger(__name__)
 
 _active_threads: set[str] = set()
 _active_threads_lock = asyncio.Lock()
 
+# Must exceed the worst-case pipeline duration so the lock never expires under a live request.
+# Core agent budget: search(60)+geo(60)+planning(90)+validation(45)+response(90) = 345s.
+# 360s gives headroom; TTL is only a crash-recovery backstop — acquired locks are released in finally.
+_THREAD_LOCK_TTL = 360
 
-async def _try_acquire_thread(thread_id: str) -> bool:
+
+async def _try_acquire_thread(thread_id: str) -> Optional[str]:
+    """Return a unique token if the lock was acquired, None if the thread is busy."""
+    cache = get_cache()
+    if cache.enabled:
+        return await cache.acquire_lock(f"threadlock:{thread_id}", ttl_seconds=_THREAD_LOCK_TTL)
     async with _active_threads_lock:
         if thread_id in _active_threads:
-            return False
+            return None
         _active_threads.add(thread_id)
-        return True
+        return "__inmem__"
 
 
-async def _release_thread(thread_id: str) -> None:
+async def _release_thread(thread_id: str, token: str) -> None:
+    cache = get_cache()
+    if cache.enabled:
+        await cache.release_lock(f"threadlock:{thread_id}", token)
+        return
     async with _active_threads_lock:
         _active_threads.discard(thread_id)
 
@@ -96,7 +110,8 @@ async def plan_trip(request: PlanRequest, http_request: Request):
         logger.warning(f"[{request_id}] Guardrail REJECT: {guard.check_failed}")
         raise HTTPException(status_code=400, detail=guard.reason)
 
-    if not await _try_acquire_thread(thread_id):
+    lock_token = await _try_acquire_thread(thread_id)
+    if not lock_token:
         logger.warning(f"[{request_id}] thread_busy thread={thread_id}")
         raise HTTPException(
             status_code=409,
@@ -117,25 +132,27 @@ async def plan_trip(request: PlanRequest, http_request: Request):
         "user_id": request.user_id or "",
     }
 
-    graph = getattr(http_request.app.state, "graph", None)
-    if graph is None:
-        raise HTTPException(status_code=503, detail="Graph not initialized")
-
-    config = get_run_config(
-        request_id=request_id,
-        thread_id=thread_id,
-        user_id=request.user_id,
-    )
-
-    ACTIVE_REQUESTS.inc()
     try:
-        result = await graph.ainvoke(state, config=config)
-    except Exception as e:
-        logger.error(f"[{request_id}] Graph failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Graph error: {str(e)[:200]}")
+        graph = getattr(http_request.app.state, "graph", None)
+        if graph is None:
+            raise HTTPException(status_code=503, detail="Graph not initialized")
+
+        config = get_run_config(
+            request_id=request_id,
+            thread_id=thread_id,
+            user_id=request.user_id,
+        )
+
+        ACTIVE_REQUESTS.inc()
+        try:
+            result = await graph.ainvoke(state, config=config)
+        except Exception as e:
+            logger.error(f"[{request_id}] Graph failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Graph error: {str(e)[:200]}")
+        finally:
+            ACTIVE_REQUESTS.dec()
     finally:
-        ACTIVE_REQUESTS.dec()
-        await _release_thread(thread_id)
+        await _release_thread(thread_id, lock_token)
 
     duration = (datetime.now(timezone.utc) - started_at).total_seconds()
 

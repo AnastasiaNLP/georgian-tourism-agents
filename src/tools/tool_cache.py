@@ -11,6 +11,8 @@ import asyncio
 import json
 import hashlib
 import logging
+import urllib.parse
+import uuid
 from typing import Any, Optional, Callable
 from functools import wraps
 import httpx
@@ -88,6 +90,48 @@ class RedisCache:
             return r.status_code == 200
         except Exception as e:
             logger.debug(f"Cache SET failed for {key}: {e}")
+            return False
+
+    async def acquire_lock(self, key: str, ttl_seconds: int = 360) -> Optional[str]:
+        """SET key <token> NX EX ttl — returns unique token if acquired, None if lock is held."""
+        if not self._enabled:
+            return None
+        token = uuid.uuid4().hex
+        try:
+            r = await self._get_client().post(
+                f"{self.url}/set/{key}",
+                headers=self._headers(),
+                content=token,
+                params={"EX": ttl_seconds, "NX": ""},
+            )
+            data = r.json()
+            return token if data.get("result") == "OK" else None
+        except Exception as e:
+            logger.debug(f"Cache ACQUIRE_LOCK failed for {key}: {e}")
+            return None
+
+    async def release_lock(self, key: str, token: str) -> bool:
+        """Compare-and-delete via Lua EVAL: only removes the lock if the stored value matches token."""
+        if not self._enabled:
+            return False
+        # Atomic: if get(key)==token then del(key) — prevents releasing another owner's lock.
+        script = "if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end"
+        path = "/".join([
+            "eval",
+            urllib.parse.quote(script, safe=""),
+            "1",
+            urllib.parse.quote(key, safe=""),
+            urllib.parse.quote(token, safe=""),
+        ])
+        try:
+            r = await self._get_client().post(
+                f"{self.url}/{path}",
+                headers=self._headers(),
+            )
+            data = r.json()
+            return bool(data.get("result"))
+        except Exception as e:
+            logger.debug(f"Cache RELEASE_LOCK failed for {key}: {e}")
             return False
 
     async def delete(self, key: str) -> bool:
