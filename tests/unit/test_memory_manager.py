@@ -199,3 +199,46 @@ def test_extract_pace_always_written():
     mm = MemoryManager()
     update = mm.extract_profile_update(_make_state("INFO", with_itinerary=False))
     assert update.get("preferred_pace") == "moderate"
+
+
+# ---------------------------------------------------------------------------
+# cleanup_stale_profiles
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cleanup_stale_profiles_deletes_old_rows():
+    """cleanup_stale_profiles runs a DELETE and returns the row count."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_cursor = MagicMock()
+    mock_cursor.rowcount = 3
+
+    mock_conn = AsyncMock()
+    mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_conn.__aexit__ = AsyncMock(return_value=False)
+    mock_conn.execute = AsyncMock(return_value=mock_cursor)
+
+    mock_pool = AsyncMock()
+    mock_pool.connection = MagicMock(return_value=mock_conn)
+
+    mm = MemoryManager()
+    with patch("src.memory.db.get_pool", AsyncMock(return_value=mock_pool)):
+        deleted = await mm.cleanup_stale_profiles(days=90)
+
+    assert deleted == 3
+    mock_conn.execute.assert_awaited_once()
+    sql, params = mock_conn.execute.call_args.args
+    assert "DELETE" in sql.upper()
+    assert params == (90,)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stale_profiles_returns_zero_on_error():
+    """Database failure during cleanup must not raise — returns 0."""
+    from unittest.mock import AsyncMock, patch
+
+    mm = MemoryManager()
+    with patch("src.memory.db.get_pool", AsyncMock(side_effect=ConnectionError("db down"))):
+        deleted = await mm.cleanup_stale_profiles()
+
+    assert deleted == 0

@@ -213,54 +213,37 @@ async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
     }
 
 
+def _resolve_intent(state: TravelPlanningState) -> Optional[str]:
+    """Single source of truth for routing intent.
+
+    Primary: orchestration.intent (set by classifier and every agent that changes flow).
+    Fallback: conversation_stage (mirrors intent; used when orchestration is absent).
+    The legacy top-level state["intent"] field is intentionally not consulted here.
+    """
+    orch = state.get("orchestration") or {}
+    intent = orch.get("intent") if isinstance(orch, dict) else getattr(orch, "intent", None)
+    return intent or state.get("conversation_stage")
+
+
 def route_from_orchestrator(state: TravelPlanningState) -> str:
     if state.get("task_complete"):
         return "__end__"
-
-    # Intent is the primary routing signal from the classifier.
-    # Stage is derived UI state and only used as fallback.
-    orchestration = state.get("orchestration") or {}
-    intent = orchestration.get("intent") if isinstance(orchestration, dict) else getattr(orchestration, "intent", None)
-    if intent is None:
-        intent = state.get("intent")
-
+    intent = _resolve_intent(state)
     if intent == "CONSULT":
         return "consultation_agent"
     if intent == "REVISE":
         return "revision_agent"
-    if intent in {"PLAN", "INFO", "SEARCH"}:
-        return "search_agent"
-
-    # Fallback to stage if intent is missing.
-    stage = state.get("conversation_stage")
-    if stage == "CONSULT":
-        return "consultation_agent"
-    if stage == "REVISE":
-        return "revision_agent"
-    if stage in {"PLAN", "INFO"}:
-        return "search_agent"
-
-    return _normalize_agent_decision(state.get("orchestrator_decision", "search_agent"))
+    return "search_agent"  # PLAN, INFO, SEARCH, or unknown default
 
 
 def route_after_consultation(state: TravelPlanningState) -> str:
     if state.get("task_complete"):
         return "memory_save"
-    orchestration = state.get("orchestration") or {}
-    intent = orchestration.get("intent") if isinstance(orchestration, dict) else getattr(orchestration, "intent", None)
-    if intent is None:
-        intent = state.get("intent")
-    if intent == "PLAN":
-        return "search_agent"
-    return "response_agent"
+    return "search_agent" if _resolve_intent(state) == "PLAN" else "response_agent"
 
 
 def route_after_search(state: TravelPlanningState) -> str:
-    orchestration = state.get("orchestration") or {}
-    intent = orchestration.get("intent") if isinstance(orchestration, dict) else getattr(orchestration, "intent", None)
-    if intent is None:
-        intent = state.get("intent")
-    return "geo_agent" if intent == "PLAN" else "response_agent"
+    return "geo_agent" if _resolve_intent(state) == "PLAN" else "response_agent"
 
 
 def route_after_validation(state: TravelPlanningState) -> str:
@@ -283,20 +266,6 @@ def route_after_planning(state: TravelPlanningState) -> str:
     flags = state.get("feature_flags") or {}
     return "validation_agent" if flags.get("ENABLE_VALIDATION", True) else "response_agent"
 
-
-def _normalize_agent_decision(decision: Optional[str]) -> str:
-    allowed = {
-        "search_agent",
-        "planning_agent",
-        "geo_agent",
-        "validation_agent",
-        "response_agent",
-        "consultation_agent",
-        "revision_agent",
-    }
-    if decision not in allowed:
-        return "response_agent"
-    return decision
 
 
 async def eval_node(state: TravelPlanningState) -> dict:

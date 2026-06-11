@@ -10,7 +10,7 @@ def test_search_intent_goes_to_response():
 def test_plan_intent_goes_to_geo():
     from graph.main_graph import route_after_search
 
-    assert route_after_search({"intent": "PLAN"}) == "geo_agent"
+    assert route_after_search({"orchestration": {"intent": "PLAN"}}) == "geo_agent"
 
 
 def test_validation_flag_controls_post_planning_route():

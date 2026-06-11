@@ -22,13 +22,15 @@ def test_route_from_orchestrator_fallback_stage():
     assert route_from_orchestrator({"conversation_stage": "INFO"}) == "search_agent"
 
 
-def test_route_after_search_supports_new_and_legacy_intent():
+def test_route_after_search():
     from graph.main_graph import route_after_search
 
     assert route_after_search({"orchestration": {"intent": "PLAN"}}) == "geo_agent"
     assert route_after_search({"orchestration": {"intent": "INFO"}}) == "response_agent"
-    assert route_after_search({"intent": "PLAN"}) == "geo_agent"
-    assert route_after_search({"intent": "SEARCH"}) == "response_agent"
+    assert route_after_search({"orchestration": {"intent": "SEARCH"}}) == "response_agent"
+    # conversation_stage fallback when orchestration absent
+    assert route_after_search({"conversation_stage": "PLAN"}) == "geo_agent"
+    assert route_after_search({"conversation_stage": "INFO"}) == "response_agent"
 
 
 def test_route_after_consultation_can_continue_to_search():

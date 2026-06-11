@@ -124,8 +124,31 @@ class MemoryManager:
         self._schema_ready = False
 
     async def setup(self) -> None:
-        """Run schema setup once at startup. Called from lifespan."""
+        """Run schema setup and one-time cleanup once at startup. Called from lifespan."""
         await self._ensure_schema()
+        await self.cleanup_stale_profiles()
+
+    async def cleanup_stale_profiles(self, days: int = 90) -> int:
+        """Delete user profiles not updated in `days` days.
+
+        Called from setup() at each process startup — simple enough for the current
+        scale; replace with a scheduled job if the table grows large.
+        """
+        from src.memory.db import get_pool
+        try:
+            pool = await get_pool()
+            async with pool.connection() as conn:
+                cursor = await conn.execute(
+                    "DELETE FROM user_profiles WHERE updated_at < NOW() - make_interval(days => %s)",
+                    (days,),
+                )
+                deleted = cursor.rowcount or 0
+            if deleted:
+                logger.info(f"[memory] cleanup_stale_profiles: removed {deleted} profiles older than {days}d")
+            return deleted
+        except Exception as exc:
+            logger.warning(f"[memory] cleanup_stale_profiles failed: {exc}")
+            return 0
 
     async def aclose(self) -> None:
         """Close the async Qdrant client. Called from lifespan shutdown."""
