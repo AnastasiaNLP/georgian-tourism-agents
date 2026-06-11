@@ -6,10 +6,34 @@ Pure functions for searching and collecting facts.
 No decisions, no reasoning - just data retrieval.
 """
 
+import threading
 from typing import List, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
+from qdrant_client import QdrantClient
 from config.settings import get_settings
+
+
+# ============================================================================
+# Qdrant client singleton — one connection pool per worker process
+# ============================================================================
+
+_qdrant_client = None
+_qdrant_lock = threading.Lock()
+
+
+def get_qdrant_client():
+    global _qdrant_client
+    if _qdrant_client is None:
+        with _qdrant_lock:
+            if _qdrant_client is None:
+                settings = get_settings()
+                _qdrant_client = QdrantClient(
+                    url=settings.qdrant_url,
+                    api_key=settings.qdrant_api_key,
+                    timeout=10,
+                )
+    return _qdrant_client
 
 
 # ============================================================================
@@ -91,17 +115,10 @@ def search_qdrant(
     Example:
         results = search_qdrant("best churches in Mtskheta", top_k=5)
     """
-    from qdrant_client import QdrantClient
     from qdrant_client.models import Filter, FieldCondition, MatchValue
 
     settings = get_settings()
-    # Connect to Qdrant
-    client = QdrantClient(
-        url=settings.qdrant_url,
-        api_key=settings.qdrant_api_key,
-        timeout=10,
-    )
-
+    client = get_qdrant_client()
     collection_name = settings.collection_name
 
     # Build Qdrant filter
@@ -258,16 +275,8 @@ def get_place_details(place_id: str) -> dict:
     Example:
         details = get_place_details("place_123")
     """
-    from qdrant_client import QdrantClient
-
     settings = get_settings()
-    # Connect to Qdrant
-    client = QdrantClient(
-        url=settings.qdrant_url,
-        api_key=settings.qdrant_api_key,
-        timeout=10,
-    )
-
+    client = get_qdrant_client()
     collection_name = settings.collection_name
 
     try:

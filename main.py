@@ -67,6 +67,9 @@ async def lifespan(app: FastAPI):
     from src.tools.tool_cache import get_cache
     await get_cache().aclose()
 
+    from src.memory.memory_manager import get_memory_manager
+    await get_memory_manager().aclose()
+
     from src.memory.db import close_pool
     await close_pool()
     logger.info("Shutdown complete")

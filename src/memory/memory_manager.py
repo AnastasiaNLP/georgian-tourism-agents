@@ -19,6 +19,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
+from qdrant_client import AsyncQdrantClient
 from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -119,12 +120,18 @@ class MemoryManager:
     """
 
     def __init__(self):
-        self._qdrant = None
+        self._async_qdrant = None
         self._schema_ready = False
 
     async def setup(self) -> None:
         """Run schema setup once at startup. Called from lifespan."""
         await self._ensure_schema()
+
+    async def aclose(self) -> None:
+        """Close the async Qdrant client. Called from lifespan shutdown."""
+        if self._async_qdrant is not None:
+            await self._async_qdrant.close()
+            self._async_qdrant = None
 
     async def _ensure_schema(self) -> None:
         if self._schema_ready:
@@ -199,24 +206,25 @@ class MemoryManager:
     # 6B — Episodic Memory (Qdrant)
     # ========================================================================
 
-    def _get_qdrant(self):
-        """Lazy init Qdrant client."""
-        if self._qdrant is None:
-            from qdrant_client import QdrantClient
+    def _get_async_qdrant(self):
+        """Lazy init async Qdrant client."""
+        if self._async_qdrant is None:
             settings = get_settings()
-            self._qdrant = QdrantClient(
+            self._async_qdrant = AsyncQdrantClient(
                 url=settings.qdrant_url,
                 api_key=settings.qdrant_api_key,
+                timeout=10,
             )
-        return self._qdrant
+        return self._async_qdrant
 
-    def _ensure_episode_collection(self):
+    async def _ensure_episode_collection(self) -> None:
         """Create collection and indexes if missing."""
         from qdrant_client.models import VectorParams, Distance, PayloadSchemaType
-        client = self._get_qdrant()
-        collections = [c.name for c in client.get_collections().collections]
+        client = self._get_async_qdrant()
+        response = await client.get_collections()
+        collections = [c.name for c in response.collections]
         if EPISODE_COLLECTION not in collections:
-            client.create_collection(
+            await client.create_collection(
                 collection_name=EPISODE_COLLECTION,
                 vectors_config=VectorParams(
                     size=EPISODE_VECTOR_SIZE,
@@ -224,7 +232,7 @@ class MemoryManager:
                 )
             )
             # Required for user_id filtering in Qdrant Cloud.
-            client.create_payload_index(
+            await client.create_payload_index(
                 collection_name=EPISODE_COLLECTION,
                 field_name="user_id",
                 field_schema=PayloadSchemaType.KEYWORD
@@ -247,7 +255,7 @@ class MemoryManager:
         Expected keys: task, plan_summary, places, result, eval_score.
         """
         try:
-            self._ensure_episode_collection()
+            await self._ensure_episode_collection()
 
             # Embed task and summary.
             embed_text = f"{episode.get('task', '')} {episode.get('plan_summary', '')}"
@@ -264,16 +272,13 @@ class MemoryManager:
                 "created_at":   datetime.now(timezone.utc).isoformat(),
             }
 
-            import uuid
-            point_id = str(uuid.uuid4()).replace("-", "")[:16]
-            # Qdrant point IDs must be int or UUID.
             import hashlib
             point_id_int = int(hashlib.md5(
                 f"{user_id}:{embed_text}:{payload['created_at']}".encode()
             ).hexdigest()[:8], 16)
 
             from qdrant_client.models import PointStruct
-            self._get_qdrant().upsert(
+            await self._get_async_qdrant().upsert(
                 collection_name=EPISODE_COLLECTION,
                 points=[PointStruct(
                     id=point_id_int,
@@ -308,12 +313,12 @@ class MemoryManager:
             episodes_used: int
         """
         try:
-            self._ensure_episode_collection()
+            await self._ensure_episode_collection()
 
             vector = self._embed(query)
 
             from qdrant_client.models import Filter, FieldCondition, MatchValue
-            results = self._get_qdrant().query_points(
+            response = await self._get_async_qdrant().query_points(
                 collection_name=EPISODE_COLLECTION,
                 query=vector,
                 limit=top_k,
@@ -323,7 +328,8 @@ class MemoryManager:
                         match=MatchValue(value=user_id)
                     )]
                 )
-            ).points
+            )
+            results = response.points
 
             episodes = [r.payload for r in results]
 
