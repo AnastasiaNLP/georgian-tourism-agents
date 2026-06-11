@@ -41,137 +41,12 @@ async def _do_search(search_query: str, region: Optional[str], max_results: int)
     return all_results[:max_results]
 
 
-def _translate_query(query: str) -> str:  # DEPRECATED — kept only as fallback
-    """Kept as last-resort fallback if orchestrator didn't provide search_query."""
-    replacements = {
-        # Nature and landscape
-        "природа": "nature", "природные": "nature", "природный": "nature",
-        "горы": "mountains", "гора": "mountain", "горный": "mountain",
-        "море": "sea", "морской": "sea", "пляж": "beach",
-        "водопад": "waterfall", "водопады": "waterfalls",
-        "река": "river", "озеро": "lake", "ущелье": "gorge", "каньон": "canyon",
-        "лес": "forest", "пещера": "cave", "ледник": "glacier",
-        "заповедник": "nature reserve", "национальный парк": "national park",
-        "парк": "park", "хребет": "ridge",
-        # Activities
-        "треккинг": "trekking", "трекинг": "trekking",
-        "поход": "hiking", "пешеходный": "hiking",
-        "восхождение": "climbing", "велосипед": "cycling",
-        "сплав": "rafting", "плавание": "swimming",
-        # Culture and history
-        "музей": "museum", "музеи": "museums", "галерея": "gallery", "галереи": "galleries",
-        "церковь": "church", "церкви": "churches", "храм": "temple", "собор": "cathedral",
-        "монастырь": "monastery", "монастыри": "monasteries",
-        "крепость": "fortress", "крепости": "fortresses", "замок": "castle", "башня": "tower",
-        "памятник": "monument", "памятники": "monuments", "руины": "ruins",
-        "достопримечательности": "attractions sights",
-        # Places and objects
-        "места": "places", "место": "place",
-        "объекты": "objects", "объект": "object",
-        "площадь": "square", "площади": "squares",
-        "бульвар": "boulevard", "бульвары": "boulevards",
-        "набережная": "promenade", "набережные": "promenades",
-        "рынок": "market", "рынки": "markets", "базар": "market",
-        "ботанический сад": "botanical garden",
-        "зоопарк": "zoo",
-        "парки": "parks", "пляжи": "beaches",
-        # Quality/type adjectives
-        "современные": "modern", "современный": "modern",
-        "лучшие": "best", "лучший": "best",
-        "красивые": "beautiful", "красивый": "beautiful",
-        "популярные": "popular", "популярный": "popular",
-        "известные": "famous", "известный": "famous",
-        "исторические": "historic", "исторический": "historic",
-        "старинные": "ancient", "старинный": "ancient",
-        "интересные": "interesting", "интересный": "interesting",
-        "самые": "",
-        "все": "",
-        # Food and drinks
-        "вино": "wine", "виноград": "vineyard", "винодельня": "winery",
-        "ресторан": "restaurant", "кафе": "cafe",
-        # Georgian cities
-        "батуми": "batumi", "тбилиси": "tbilisi", "кутаиси": "kutaisi",
-        "местиа": "mestia", "местия": "mestia", "телави": "telavi",
-        "сигнахи": "sighnaghi", "гори": "gori", "мцхета": "mtskheta",
-        "казбеги": "kazbegi", "боржоми": "borjomi", "вардзиа": "vardzia",
-        "кобулети": "kobuleti", "гонио": "gonio",
-        # Regions with common inflections and typos
-        "аджария": "adjara", "аджарию": "adjara", "аджаре": "adjara", "аджара": "adjara",
-        "кахетия": "kakheti", "кахетию": "kakheti", "кахетии": "kakheti",
-        "сванетия": "svaneti", "сванетию": "svaneti", "сванетии": "svaneti",
-        "свенетию": "svaneti", "свенети": "svaneti",
-        "имерети": "imereti", "имеретию": "imereti",
-        "самегрело": "samegrelo",
-        "гурия": "guria", "гурии": "guria",
-        "картли": "kartli",
-        # Time and conversational noise
-        " дней": "", " дня": "", " день": "",
-        " days": "", " day": "",
-        " завтра": "", " сегодня": "", " послезавтра": "",
-        " привет": "", "привет ": "", "привет,": "",
-        " прилетаю": "", " приеду": "", " приезжаю": "",
-        " хочу": "", " хотим": "", " планирую": "",
-        " посетить": "", " посмотреть": "", " увидеть": "",
-        " есть": "", " буду": "", " будем": "",
-        # Numerals
-        " один": "", " одного": "", " одну": "",
-        " два": "", " две": "", " двух": "",
-        " три": "", " трёх": "", " трех": "",
-        # Function words
-        " и ": " ", " в ": " ", " на ": " ", " по ": " ",
-        " с ": " ", " для ": " ", " из ": " ",
-        " у ": " ", " о ": " ", " об ": " ",
-        " я ": " ", " мы ": " ", " меня ": " ", " нас ": " ",
-        " чтобы ": " ", " который ": " ", " которые ": " ", " которых ": " ",
-        " это ": " ", " этот ": " ", " эта ": " ",
-    }
-    result = query.lower()
-    for ru, en in replacements.items():
-        result = result.replace(ru, en)
-    # Drop unrecognized Cyrillic terms that add embedding noise.
-    import re
-    result = re.sub(r'[а-яёА-ЯЁ]+', ' ', result)
-    # Normalize whitespace and punctuation.
-    result = re.sub(r'[,.\s]+', ' ', result).strip()
-    return result
-
-
-# RU→EN category normalization — so deduplication catches RU/EN pairs
-# where the primary category is the same concept in different languages.
-_RU_CATEGORY_TO_EN = {
-    "музей": "museum", "галерея": "gallery",
-    "водопад": "waterfall", "водопады": "waterfall",
-    "парк": "park", "национальный парк": "national park",
-    "крепость": "fortress", "замок": "castle",
-    "церковь": "church", "храм": "church",
-    "монастырь": "monastery",
-    "площадь": "square", "бульвар": "boulevard",
-    "ботанический сад": "botanical garden",
-    "зоопарк": "zoo",
-    "пляж": "beach",
-    "озеро": "lake",
-    "пещера": "cave",
-    "ущелье": "gorge",
-    "ресторан": "restaurant",
-    "кафе": "cafe",
-    "гора": "mountain",
-    # Compound categories
-    "городская территория": "urban area",
-    "городской парк": "urban park",
-}
-
-
 def _primary_category(cat: str) -> str:
-    """
-    Extract and normalize the primary category.
-
-    Qdrant category can contain comma- or slash-separated labels.
-    """
+    """Extract the primary category label (first comma/slash-separated token)."""
     if not cat:
         return ""
     import re
-    first = re.split(r'[,/]', cat)[0].strip().lower()
-    return _RU_CATEGORY_TO_EN.get(first, first)
+    return re.split(r'[,/]', cat)[0].strip().lower()
 
 
 def _is_en_name(name: str) -> bool:
@@ -244,51 +119,6 @@ def _deduplicate_results(results: list) -> list:
     return kept
 
 
-def _filter_by_query_intent(results: list, query: str) -> list:
-    """
-    Re-rank results according to explicit nature/culture intent.
-
-    Results are not removed; only their order changes.
-    """
-    query_lower = query.lower()
-
-    nature_keywords = {"природа", "nature", "горы", "mountains", "водопад", "waterfall",
-                       "парк", "park", "треккинг", "hiking", "пляж", "beach", "море", "sea"}
-    culture_keywords = {"музей", "museum", "церковь", "church", "крепость", "fortress",
-                        "культура", "culture", "история", "history"}
-
-    wants_nature = any(kw in query_lower for kw in nature_keywords)
-    wants_culture = any(kw in query_lower for kw in culture_keywords)
-
-    if not wants_nature and not wants_culture:
-        return results
-
-    def relevance_score(r):
-        tags = set(t.lower() for t in (r.get("tags") or []))
-        cat = (r.get("category") or "").lower()
-        name = (r.get("name") or "").lower()
-        desc = (r.get("description") or "").lower()[:200]
-        all_text = f"{cat} {' '.join(tags)} {name} {desc}"
-
-        score = r.get("score", 0)
-
-        if wants_nature:
-            if any(kw in all_text for kw in nature_keywords):
-                score += 0.3
-            if any(kw in all_text for kw in ["музей", "museum", "gallery"]):
-                score -= 0.2
-
-        if wants_culture:
-            if any(kw in all_text for kw in culture_keywords):
-                score += 0.3
-            if any(kw in all_text for kw in ["парк", "park", "beach"]):
-                score -= 0.2
-
-        return score
-
-    return sorted(results, key=relevance_score, reverse=True)
-
-
 async def search_agent_node(state: dict) -> dict:
     """Run direct Qdrant search without an LLM call."""
     request_id = state.get("request_id", "unknown")
@@ -304,20 +134,18 @@ async def search_agent_node(state: dict) -> dict:
     search_query = params.get("search_query") or user_query
 
     raw_results = await _do_search(search_query, region, max_results)
-    deduped = _deduplicate_results(raw_results)
-    filtered = _filter_by_query_intent(deduped, search_query)
+    results = _deduplicate_results(raw_results)
 
     logger.info(
         f"[{request_id}] search: {len(raw_results)} raw → "
-        f"{len(deduped)} deduped → {len(filtered)} filtered | "
-        f"lang={user_language}"
+        f"{len(results)} deduped | lang={user_language}"
     )
 
     return {
-        "search_results": filtered,
+        "search_results": results,
         "search_context": {
             "region": region,
-            "result_count": len(filtered),
+            "result_count": len(results),
             "raw_count": len(raw_results),
             "query": user_query,
         },
@@ -326,6 +154,6 @@ async def search_agent_node(state: dict) -> dict:
         "agent_history": ["search_agent"],
         "agent_scratchpad": make_scratchpad(
             "search_agent",
-            f"Found {len(filtered)} unique places in {region}, user_lang={user_language}",
+            f"Found {len(results)} unique places in {region}, user_lang={user_language}",
         ),
     }

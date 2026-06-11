@@ -83,15 +83,6 @@ def _derive_thread_id(user_id: Optional[str], conversation_id: Optional[str]) ->
     return "anon-" + uuid.uuid4().hex[:16]
 
 
-_guardrails = None
-
-def _get_guardrails():
-    global _guardrails
-    if _guardrails is None:
-        from guardrails.input_guardrails import InputGuardrails
-        _guardrails = InputGuardrails()
-    return _guardrails
-
 @router.post("/plan", response_model=PlanResponse, dependencies=[Depends(verify_api_key)])
 async def plan_trip(request: PlanRequest, http_request: Request):
     """
@@ -105,7 +96,7 @@ async def plan_trip(request: PlanRequest, http_request: Request):
     logger.info(f"[{request_id}] POST /plan query={request.query[:80]!r} "
                 f"lang={request.language} user={request.user_id} thread={thread_id}")
 
-    guard = _get_guardrails().check(request.query, request.language)
+    guard = http_request.app.state.guardrails.check(request.query, request.language)
     if not guard.passed:
         logger.warning(f"[{request_id}] Guardrail REJECT: {guard.check_failed}")
         raise HTTPException(status_code=400, detail=guard.reason)

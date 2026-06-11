@@ -131,8 +131,8 @@ async def validation_agent_node(state: dict) -> dict:
             result["recommended_action"] = "retry" if planning_count < 2 else "proceed"
             result["is_valid"] = False
 
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(f"validation LLM review failed: {exc}")
 
     from monitoring.token_tracker import merge_budget
     return {

@@ -478,28 +478,4 @@ def build_graph(checkpointer=None):
     return wf.compile(checkpointer=checkpointer)
 
 
-_cached_graph = None
-
-
-async def run_graph(
-    user_query: str,
-    request_id: str,
-    user_id: Optional[str] = None,
-    user_language: Optional[str] = None,
-    correlation_id: Optional[str] = None,
-):
-    from state.schema import create_initial_state
-
-    global _cached_graph
-    if _cached_graph is None:
-        _cached_graph = build_graph()
-    state = create_initial_state(
-        user_query=user_query,
-        request_id=request_id,
-        correlation_id=correlation_id or request_id,
-        user_id=user_id or "",
-        user_language=user_language or "en",
-    )
-    config = {"configurable": {"thread_id": request_id}}
-    return await _cached_graph.ainvoke(state, config=config)
 

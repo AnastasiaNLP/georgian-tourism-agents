@@ -37,7 +37,7 @@ def _build_scratchpad(state: Any, status: str, message: str) -> dict[str, Any]:
     }
 
 
-def _build_success_orchestration(revised_plan: dict[str, Any], state: Any) -> dict[str, Any]:
+def _build_revise_orchestration(revised_plan: dict[str, Any], state: Any) -> dict[str, Any]:
     trip_parameters = _get_value(state, "trip_parameters", {})
     if isinstance(trip_parameters, dict):
         region = trip_parameters.get("region", "")
@@ -139,7 +139,7 @@ async def revision_agent_node(state: TravelPlanningState) -> dict[str, Any]:
             "raw_itinerary": revised_plan,
             "enriched_itinerary": {},
             "final_response": "",
-            "orchestration": _build_success_orchestration(revised_plan, state),
+            "orchestration": _build_revise_orchestration(revised_plan, state),
             "router_trace": [
                 {
                     "from": "revision_agent",
@@ -163,7 +163,7 @@ async def revision_agent_node(state: TravelPlanningState) -> dict[str, Any]:
             "enriched_itinerary": {},
             "errors": [f"revision_agent: {exc}"],
             "final_response": "",
-            "orchestration": _build_success_orchestration(current_plan, state),
+            "orchestration": _build_revise_orchestration(current_plan, state),
             "router_trace": [
                 {
                     "from": "revision_agent",

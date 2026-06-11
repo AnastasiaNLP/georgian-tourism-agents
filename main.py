@@ -45,6 +45,10 @@ async def lifespan(app: FastAPI):
     registry.initialize()
     logger.info("AgentRegistry initialized")
 
+    from guardrails.input_guardrails import InputGuardrails
+    app.state.guardrails = InputGuardrails()
+    logger.info("InputGuardrails initialized")
+
     settings = get_settings()
     async with AsyncPostgresSaver.from_conn_string(settings.database_url) as checkpointer:
         await checkpointer.setup()
