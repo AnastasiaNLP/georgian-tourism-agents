@@ -1,6 +1,7 @@
 # tests/integration/test_geo_node.py
 """Integration tests for geo_agent_node with a mocked ORS API."""
 
+import asyncio
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
@@ -283,6 +284,40 @@ async def test_geo_single_anchor_does_not_build_envelope():
     by_name = {p["name"]: p for p in result["enriched_places"]}
     # No envelope with a single anchor → the far ORS result is kept.
     assert by_name["Far Same-Region Place"].get("lat") == 41.30
+
+
+@pytest.mark.asyncio
+async def test_geo_bounds_tool_concurrency():
+    """Concurrent geocode calls never exceed the configured concurrency limit."""
+    n = 15
+    state = {
+        "request_id": "concurrency-test",
+        "search_results": [
+            {"name": f"Place {i}", "location": "Georgia", "category": "x",
+             "tags": [], "description": "", "metadata": {}}
+            for i in range(n)
+        ],
+    }
+    tracker = {"cur": 0, "peak": 0}
+
+    async def _mock_geocode(city, focus_lat=41.9, focus_lon=44.0):
+        tracker["cur"] += 1
+        tracker["peak"] = max(tracker["peak"], tracker["cur"])
+        await asyncio.sleep(0.01)
+        tracker["cur"] -= 1
+        return {"lat": 42.0, "lon": 43.5}
+
+    mock_settings = MagicMock(geo_max_concurrency=3)
+
+    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=_mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock,
+               return_value={"distance_km": 10.0, "duration_min": 15.0}), \
+         patch("config.settings.get_settings", return_value=mock_settings):
+        from agents.geo.agent import geo_agent_node
+        await geo_agent_node(state)
+
+    assert tracker["peak"] <= 3, f"peak concurrency {tracker['peak']} exceeded limit 3"
+    assert tracker["peak"] > 1, "expected real concurrency, not fully serialized"
 
 
 @pytest.mark.asyncio

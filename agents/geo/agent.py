@@ -118,6 +118,14 @@ async def _geo_enrich_places(state: dict) -> dict:
     request_id = state.get("request_id", "unknown")
     search_results = state.get("search_results") or []
 
+    from config.settings import get_settings
+    settings = get_settings()
+    # Cap concurrent external tool calls so one request cannot saturate the shared
+    # asyncio.to_thread pool, and concurrent requests queue predictably instead of
+    # contending for every pool thread at once. Only actual tool calls hold a slot —
+    # places resolved from payload coordinates take the fast path and skip it.
+    sem = asyncio.Semaphore(settings.geo_max_concurrency)
+
     # Compute ORS focus point from places that already have Qdrant payload coordinates.
     # Using the centroid of known-good coordinates reduces hallucination for objects
     # (mountains, waterfalls) whose names ORS resolves by global text-matching.
@@ -156,8 +164,7 @@ async def _geo_enrich_places(state: dict) -> dict:
     # the lone anchor inside a large region. With fewer than two anchors we cannot bound
     # the result without external region data, so only the country-level box applies.
     if len(_payload_coords) >= 2:
-        from config.settings import get_settings
-        margin = get_settings().geo_coord_envelope_margin_deg
+        margin = settings.geo_coord_envelope_margin_deg
         lats = [c[0] for c in _payload_coords]
         lons = [c[1] for c in _payload_coords]
         coord_envelope = (min(lats) - margin, max(lats) + margin,
@@ -203,7 +210,8 @@ async def _geo_enrich_places(state: dict) -> dict:
         )
         query = f"{name}, {city}" if (name and city) else (name if name else loc)
         try:
-            result = await cached_geocode_city(query, focus_lat=focus_lat, focus_lon=focus_lon)
+            async with sem:
+                result = await cached_geocode_city(query, focus_lat=focus_lat, focus_lon=focus_lon)
             if "lat" in result and "lon" in result:
                 lat, lon = result["lat"], result["lon"]
                 if not _in_georgia(lat, lon):
@@ -243,7 +251,8 @@ async def _geo_enrich_places(state: dict) -> dict:
     async def get_distance(a: dict, b: dict) -> tuple:
         a_name, b_name = a["name"], b["name"]
         try:
-            result = await cached_get_route(a["lon"], a["lat"], b["lon"], b["lat"])
+            async with sem:
+                result = await cached_get_route(a["lon"], a["lat"], b["lon"], b["lat"])
             if "distance_km" in result:
                 val = {"km": result["distance_km"], "hours": result["duration_min"] / 60}
                 return a_name, b_name, val
