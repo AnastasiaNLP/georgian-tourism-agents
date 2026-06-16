@@ -30,13 +30,24 @@ class ExecutionGuard:
         self,
         max_orchestrator_calls: int = 8,
         max_agent_retries: int = 2,
-        max_wall_time_seconds: float = 300.0,
-        max_cost_usd: float = 0.50,
+        max_wall_time_seconds: Optional[float] = None,
+        max_cost_usd: Optional[float] = None,
     ):
+        # Wall-time and cost limits default to settings so the guard, the router's
+        # hard timeout, and the validation budget check all read one source.
+        from config.settings import get_settings
+
+        settings = get_settings()
         self.max_orchestrator_calls = max_orchestrator_calls
         self.max_agent_retries = max_agent_retries
-        self.max_wall_time_seconds = max_wall_time_seconds
-        self.max_cost_usd = max_cost_usd
+        self.max_wall_time_seconds = (
+            max_wall_time_seconds if max_wall_time_seconds is not None
+            else settings.execution_max_wall_time_seconds
+        )
+        self.max_cost_usd = (
+            max_cost_usd if max_cost_usd is not None
+            else settings.execution_max_cost_usd
+        )
 
     def check_before_plan(self, state: dict) -> GuardResult:
         """

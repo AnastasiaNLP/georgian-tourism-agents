@@ -85,6 +85,13 @@ class Settings(BaseModel, frozen=True):
     # geocoding errors (a plausible point in the wrong part of Georgia).
     geo_coord_envelope_margin_deg: float = 0.5
 
+    # Execution budget. The in-graph guard stops further work when wall-time or cost
+    # is exceeded; the router enforces a hard ceiling above it so a hung node cannot
+    # run forever (must exceed the guard wall-time to let the guard act first).
+    execution_max_wall_time_seconds: float = 300.0
+    execution_max_cost_usd: float = 0.50
+    request_hard_timeout_seconds: float = 360.0
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -163,4 +170,7 @@ def get_settings() -> Settings:
         validation_distance_tolerance=_get_float("VALIDATION_DISTANCE_TOLERANCE", 0.25),
         validation_min_grounding=_get_float("VALIDATION_MIN_GROUNDING", 0.5),
         geo_coord_envelope_margin_deg=_get_float("GEO_COORD_ENVELOPE_MARGIN_DEG", 0.5),
+        execution_max_wall_time_seconds=_get_float("EXECUTION_MAX_WALL_TIME_SECONDS", 300.0),
+        execution_max_cost_usd=_get_float("EXECUTION_MAX_COST_USD", 0.50),
+        request_hard_timeout_seconds=_get_float("REQUEST_HARD_TIMEOUT_SECONDS", 360.0),
     )

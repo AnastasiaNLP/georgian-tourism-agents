@@ -23,17 +23,22 @@ logger = logging.getLogger(__name__)
 _active_threads: set[str] = set()
 _active_threads_lock = asyncio.Lock()
 
-# Must exceed the worst-case pipeline duration so the lock never expires under a live request.
-# Core agent budget: search(60)+geo(60)+planning(90)+validation(45)+response(90) = 345s.
-# 360s gives headroom; TTL is only a crash-recovery backstop — acquired locks are released in finally.
-_THREAD_LOCK_TTL = 360
+# The lock must outlive the request, so its TTL is derived from the hard request
+# timeout plus a margin — never a standalone constant that could silently fall below
+# an env-raised timeout and re-open the double-submit window. The TTL is only a
+# crash-recovery backstop; acquired locks are released in the finally block.
+_THREAD_LOCK_MARGIN_SECONDS = 30
+
+
+def _thread_lock_ttl() -> int:
+    return int(get_settings().request_hard_timeout_seconds) + _THREAD_LOCK_MARGIN_SECONDS
 
 
 async def _try_acquire_thread(thread_id: str) -> Optional[str]:
     """Return a unique token if the lock was acquired, None if the thread is busy."""
     cache = get_cache()
     if cache.enabled:
-        return await cache.acquire_lock(f"threadlock:{thread_id}", ttl_seconds=_THREAD_LOCK_TTL)
+        return await cache.acquire_lock(f"threadlock:{thread_id}", ttl_seconds=_thread_lock_ttl())
     async with _active_threads_lock:
         if thread_id in _active_threads:
             return None
@@ -74,6 +79,27 @@ class PlanResponse(BaseModel):
     eval_score: Optional[dict]
     memory_saved: bool
     duration_seconds: float
+
+# System-level timeout messages (not domain knowledge — safe to keep inline).
+_TIMEOUT_MESSAGE = {
+    "ru": "Запрос занял слишком много времени. Попробуйте сузить его или повторить позже.",
+    "en": "This request took too long. Try narrowing it down or retry later.",
+    "ka": "მოთხოვნამ ძალიან დიდი დრო წაიღო. სცადეთ დააზუსტოთ ან მოგვიანებით სცადოთ.",
+}
+
+
+def _timeout_degraded_result(language: str) -> dict:
+    """Minimal degraded result used when the graph exceeds the hard time ceiling."""
+    return {
+        "final_response": _TIMEOUT_MESSAGE.get(language, _TIMEOUT_MESSAGE["en"]),
+        "execution_mode": "degraded",
+        "agent_history": [],
+        "raw_itinerary": {},
+        "enriched_itinerary": {},
+        "eval_score": None,
+        "memory_saved": False,
+    }
+
 
 def _derive_thread_id(user_id: Optional[str], conversation_id: Optional[str]) -> str:
     if conversation_id:
@@ -134,9 +160,17 @@ async def plan_trip(request: PlanRequest, http_request: Request):
             user_id=request.user_id,
         )
 
+        timeout_s = get_settings().request_hard_timeout_seconds
         ACTIVE_REQUESTS.inc()
         try:
-            result = await graph.ainvoke(state, config=config)
+            result = await asyncio.wait_for(
+                graph.ainvoke(state, config=config), timeout=timeout_s
+            )
+        except asyncio.TimeoutError:
+            # Hard ceiling above the in-graph guard: a hung node cannot run forever.
+            # Return a graceful degraded response instead of hanging or 500-ing.
+            logger.error(f"[{request_id}] graph exceeded hard timeout {timeout_s}s")
+            result = _timeout_degraded_result(request.language)
         except Exception as e:
             logger.error(f"[{request_id}] Graph failed: {e}", exc_info=True)
             raise HTTPException(

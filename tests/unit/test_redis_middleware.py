@@ -6,7 +6,7 @@ Covers:
   - _try_acquire_thread / _release_thread: Redis CAS path, in-memory fallback
   - RedisCache.acquire_lock: NX semantics, returns unique token
   - RedisCache.release_lock: compare-and-delete via Lua EVAL
-  - _THREAD_LOCK_TTL: must exceed the pipeline agent-timeout budget
+  - _thread_lock_ttl(): must exceed the pipeline agent-timeout budget
 """
 from __future__ import annotations
 
@@ -207,7 +207,10 @@ async def test_thread_lock_redis_acquire_success():
         result = await _try_acquire_thread("thread-abc")
 
     assert result == "abc123"
-    cache.acquire_lock.assert_awaited_once_with("threadlock:thread-abc", ttl_seconds=360)
+    from api.router import _thread_lock_ttl
+    cache.acquire_lock.assert_awaited_once_with(
+        "threadlock:thread-abc", ttl_seconds=_thread_lock_ttl()
+    )
 
 
 @pytest.mark.asyncio
@@ -262,14 +265,15 @@ async def test_thread_lock_fallback_acquire_and_release():
 
 def test_thread_lock_ttl_exceeds_pipeline_budget():
     """Lock TTL must exceed the sum of all core agent timeouts to survive slow runs."""
-    from api.router import _THREAD_LOCK_TTL
+    from api.router import _thread_lock_ttl
     from agents.error_handler import AGENT_TIMEOUTS
 
     core_agents = ["search_agent", "geo_agent", "planning_agent", "validation_agent", "response_agent"]
     pipeline_budget = sum(AGENT_TIMEOUTS[a] for a in core_agents)
+    ttl = _thread_lock_ttl()
 
-    assert _THREAD_LOCK_TTL > pipeline_budget, (
-        f"Lock TTL ({_THREAD_LOCK_TTL}s) must exceed pipeline budget "
+    assert ttl > pipeline_budget, (
+        f"Lock TTL ({ttl}s) must exceed pipeline budget "
         f"({pipeline_budget}s = "
         + " + ".join(f"{a.split('_')[0]}({AGENT_TIMEOUTS[a]})" for a in core_agents)
         + ")"

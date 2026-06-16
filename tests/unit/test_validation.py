@@ -204,6 +204,32 @@ class TestDistanceGrounding:
         assert result["low_distance_confidence"] is False
 
 
+class TestBudgetExhausted:
+    def test_cost_over_limit(self):
+        from agents.validation.agent import _budget_exhausted
+        assert _budget_exhausted({"budget_state": {"estimated_cost_usd": 0.99}}) is True
+
+    def test_cost_under_limit(self):
+        from agents.validation.agent import _budget_exhausted
+        assert _budget_exhausted({"budget_state": {"estimated_cost_usd": 0.01}}) is False
+
+    def test_wall_time_over_limit(self):
+        from datetime import datetime, timezone, timedelta
+        from agents.validation.agent import _budget_exhausted
+        old_start = (datetime.now(timezone.utc) - timedelta(seconds=10_000)).isoformat()
+        assert _budget_exhausted({"execution_start_time": old_start}) is True
+
+    def test_wall_time_over_limit_epoch_float(self):
+        """A numeric epoch start time is handled, not just datetime/str."""
+        import time
+        from agents.validation.agent import _budget_exhausted
+        assert _budget_exhausted({"execution_start_time": time.time() - 10_000}) is True
+
+    def test_empty_state_not_exhausted(self):
+        from agents.validation.agent import _budget_exhausted
+        assert _budget_exhausted({}) is False
+
+
 class TestHaversine:
     def test_known_distance(self):
         """Tbilisi → Batumi is roughly 270 km in a straight line."""

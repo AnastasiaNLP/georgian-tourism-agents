@@ -107,6 +107,26 @@ async def test_after_two_planning_attempts_no_retry(state_with_itinerary):
 
 
 @pytest.mark.asyncio
+async def test_budget_exhausted_stops_retry_and_degrades():
+    """A failing plan stops retrying (proceed+degraded) when the cost budget is spent,
+    even before the planning-attempt limit is reached."""
+    state = {
+        "request_id": "val-budget",
+        "raw_itinerary": {
+            "days": [{"day": 1, "activities": [{"name": "A"}, {"name": "B"}],
+                      "total_distance_km": 300, "total_driving_hours": 1}]  # error: > limit
+        },
+        "agent_history": ["planning_agent"],   # planning_count = 1 (< 2)
+        "trip_parameters": {"pace": "moderate"},
+        "budget_state": {"estimated_cost_usd": 0.99},  # over default 0.50 limit
+    }
+    from agents.validation.agent import validation_agent_node
+    result = await validation_agent_node(state)
+    assert result["execution_mode"] == "degraded"
+    assert result["validation_result"]["recommended_action"] == "proceed"
+
+
+@pytest.mark.asyncio
 async def test_low_distance_grounding_degrades_and_proceeds():
     """Geo ran but covered none of the day's legs → degrade, disclose, do not retry."""
     state = {

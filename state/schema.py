@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import operator
+from datetime import datetime
 from typing import Any, Annotated, List, Optional, TypedDict, Union
 
 from langchain_core.messages import AnyMessage
@@ -63,7 +64,7 @@ class TravelPlanningState(TypedDict, total=False):
     orchestrator_decision: str
     orchestrator_params: dict[str, Any]
 
-    execution_start_time: float
+    execution_start_time: datetime
     execution_mode: str
     memory_saved: bool
     eval_score: dict

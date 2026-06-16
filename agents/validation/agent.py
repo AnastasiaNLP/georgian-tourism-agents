@@ -52,15 +52,16 @@ async def validation_agent_node(state: dict) -> dict:
     result = _auto_validate(itinerary, pace, distances, coords_by_name)
 
     # Hard errors (including reported distances that fall below the measured route)
-    # do not need LLM review — re-plan, or proceed degraded once retries are spent.
+    # do not need LLM review — re-plan, or proceed degraded once retries are spent
+    # or the time/cost budget is exhausted (re-planning would only spend more).
     if result["errors"]:
-        is_degraded = planning_count >= 2
+        is_degraded = planning_count >= 2 or _budget_exhausted(state)
         if is_degraded:
             result["recommended_action"] = "proceed"
         logger.info(
             f"[{request_id}] validation_agent: FAILED programmatic, "
             f"{len(result['errors'])} errors"
-            f"{' (retry exhausted → degraded)' if is_degraded else ' (→ retry)'}"
+            f"{' (stopping → degraded)' if is_degraded else ' (→ retry)'}"
         )
         return_dict = {
             "validation_result": result,
@@ -276,6 +277,31 @@ def _auto_validate(itinerary: dict, pace: str, distances: dict,
         "low_distance_confidence": low_distance_confidence,
         "distance_grounding": round(grounding, 2),
     }
+
+
+def _budget_exhausted(state: dict) -> bool:
+    """Whether the request's wall-time or cost budget is spent (limits from settings)."""
+    from config.settings import get_settings
+
+    s = get_settings()
+    budget = state.get("budget_state") or {}
+    if budget.get("estimated_cost_usd", 0.0) >= s.execution_max_cost_usd:
+        return True
+
+    start = state.get("execution_start_time")
+    if start:
+        from datetime import datetime, timezone
+
+        if isinstance(start, (int, float)):
+            start = datetime.fromtimestamp(start, tz=timezone.utc)
+        elif isinstance(start, str):
+            start = datetime.fromisoformat(start)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        elapsed = (datetime.now(timezone.utc) - start).total_seconds()
+        if elapsed >= s.execution_max_wall_time_seconds:
+            return True
+    return False
 
 
 def _coords_by_name(enriched_places: list) -> dict:
