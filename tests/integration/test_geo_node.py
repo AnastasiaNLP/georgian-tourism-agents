@@ -199,6 +199,92 @@ async def test_geo_falls_back_to_georgia_centroid_when_no_payload_coords():
     assert used_lat == 41.9 and used_lon == 44.0, "Must use Georgia centroid when no payload coords"
 
 
+def _svaneti_state_with_ors_place():
+    """Two payload-coords places in Svaneti + one ORS-only place."""
+    return {
+        "request_id": "envelope-test",
+        "search_results": [
+            {"name": "Ushguli Towers", "location": "Svaneti", "category": "historic",
+             "tags": [], "description": "", "metadata": {"lat": 43.12, "lon": 42.88}},
+            {"name": "Mestia Cathedral", "location": "Svaneti", "category": "church",
+             "tags": [], "description": "", "metadata": {"lat": 43.05, "lon": 42.73}},
+            {"name": "Svaneti Waterfall", "location": "Svaneti", "category": "waterfall",
+             "tags": [], "description": "", "metadata": {}},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_geo_discards_ors_coord_outside_region_envelope():
+    """An ORS result inside Georgia but far from the payload cluster is discarded."""
+    state = _svaneti_state_with_ors_place()
+
+    async def _mock_geocode(city, focus_lat=41.9, focus_lon=44.0):
+        # Tbilisi — inside Georgia, but ~250 km from the Svaneti payload cluster.
+        return {"lat": 41.72, "lon": 44.79}
+
+    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=_mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock,
+               return_value={"distance_km": 10.0, "duration_min": 15.0}):
+        from agents.geo.agent import geo_agent_node
+        result = await geo_agent_node(state)
+
+    by_name = {p["name"]: p for p in result["enriched_places"]}
+    # Payload places keep their coordinates.
+    assert by_name["Ushguli Towers"].get("lat") == 43.12
+    assert by_name["Mestia Cathedral"].get("lat") == 43.05
+    # The far ORS result is rejected — the place has no coordinates.
+    assert by_name["Svaneti Waterfall"].get("lat") is None
+
+
+@pytest.mark.asyncio
+async def test_geo_keeps_ors_coord_inside_region_envelope():
+    """An ORS result within the payload cluster envelope is accepted."""
+    state = _svaneti_state_with_ors_place()
+
+    async def _mock_geocode(city, focus_lat=41.9, focus_lon=44.0):
+        # Inside the Svaneti envelope.
+        return {"lat": 43.00, "lon": 42.80}
+
+    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=_mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock,
+               return_value={"distance_km": 10.0, "duration_min": 15.0}):
+        from agents.geo.agent import geo_agent_node
+        result = await geo_agent_node(state)
+
+    by_name = {p["name"]: p for p in result["enriched_places"]}
+    assert by_name["Svaneti Waterfall"].get("lat") == 43.00
+    assert by_name["Svaneti Waterfall"].get("coord_source") == "ors"
+
+
+@pytest.mark.asyncio
+async def test_geo_single_anchor_does_not_build_envelope():
+    """With only one payload anchor, the envelope is not applied (country box only)."""
+    state = {
+        "request_id": "single-anchor-test",
+        "search_results": [
+            {"name": "Lone Anchor", "location": "Kakheti", "category": "winery",
+             "tags": [], "description": "", "metadata": {"lat": 41.92, "lon": 45.49}},
+            {"name": "Far Same-Region Place", "location": "Kakheti", "category": "monastery",
+             "tags": [], "description": "", "metadata": {}},
+        ],
+    }
+
+    async def _mock_geocode(city, focus_lat=41.9, focus_lon=44.0):
+        # ~120 km from the lone anchor but legitimately inside Georgia.
+        return {"lat": 41.30, "lon": 46.30}
+
+    with patch("src.tools.tool_cache.cached_geocode_city", side_effect=_mock_geocode), \
+         patch("src.tools.tool_cache.cached_get_route", new_callable=AsyncMock,
+               return_value={"distance_km": 10.0, "duration_min": 15.0}):
+        from agents.geo.agent import geo_agent_node
+        result = await geo_agent_node(state)
+
+    by_name = {p["name"]: p for p in result["enriched_places"]}
+    # No envelope with a single anchor → the far ORS result is kept.
+    assert by_name["Far Same-Region Place"].get("lat") == 41.30
+
+
 @pytest.mark.asyncio
 async def test_geo_partial_geocoding(state_with_search):
     """If some places fail geocoding, all places remain in enriched_places."""

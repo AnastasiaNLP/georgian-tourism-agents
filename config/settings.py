@@ -80,6 +80,10 @@ class Settings(BaseModel, frozen=True):
     # Minimum fraction of route legs that must have a measured distance before
     # the itinerary is trusted; below this the run is marked degraded.
     validation_min_grounding: float = 0.5
+    # Geo: margin (degrees) added around a result's known-good payload coordinates
+    # to form the acceptance envelope; ORS results outside it are discarded as
+    # geocoding errors (a plausible point in the wrong part of Georgia).
+    geo_coord_envelope_margin_deg: float = 0.5
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -158,4 +162,5 @@ def get_settings() -> Settings:
         validation_max_driving_hours=_get_int("VALIDATION_MAX_DRIVING_HOURS", 4),
         validation_distance_tolerance=_get_float("VALIDATION_DISTANCE_TOLERANCE", 0.25),
         validation_min_grounding=_get_float("VALIDATION_MIN_GROUNDING", 0.5),
+        geo_coord_envelope_margin_deg=_get_float("GEO_COORD_ENVELOPE_MARGIN_DEG", 0.5),
     )

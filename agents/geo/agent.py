@@ -81,6 +81,12 @@ def _in_georgia(lat: float, lon: float) -> bool:
             _GEORGIA_LON[0] <= lon <= _GEORGIA_LON[1])
 
 
+def _in_envelope(lat: float, lon: float, envelope: tuple) -> bool:
+    """Whether a point lies inside the (lat_min, lat_max, lon_min, lon_max) box."""
+    lat_min, lat_max, lon_min, lon_max = envelope
+    return lat_min <= lat <= lat_max and lon_min <= lon <= lon_max
+
+
 def _city_from_location(location: str) -> str:
     """
     Extract city/area name from a Qdrant location string.
@@ -111,19 +117,16 @@ async def _geo_enrich_places(state: dict) -> dict:
 
     request_id = state.get("request_id", "unknown")
     search_results = state.get("search_results") or []
-    # Region for bounding-box validation of geocoded coordinates
-    region = (state.get("search_context") or {}).get("region", "Georgia")
 
     # Compute ORS focus point from places that already have Qdrant payload coordinates.
     # Using the centroid of known-good coordinates reduces hallucination for objects
     # (mountains, waterfalls) whose names ORS resolves by global text-matching.
     # Falls back to the Georgia centroid when no payload coordinates are present.
-    # Limitation: this is a mitigation, not a full fix — focus.point is a soft ORS
-    # ranking hint, so wrong-but-within-Georgia results are not caught by the bbox filter.
-    # Per-region bounding boxes would fully solve this but require region boundary data.
-    # Note: on multi-region results (e.g. Adjara + Kakheti in one query), the centroid
-    # drifts toward the country centre and may not help peripheral ORS-only places.
-    # Single-region queries (the normal case after upstream region filtering) are fine.
+    # The focus point is only a soft ORS ranking hint; the acceptance envelope built
+    # below is what actually rejects wrong-but-within-Georgia results, derived from the
+    # result's own coordinates (no external region boundary data needed).
+    # Note: on multi-region results the centroid drifts toward the country centre — that
+    # weakens the focus hint, while the envelope simply widens to span both regions.
     _payload_coords = [
         (float((p.get("metadata") or {})["lat"]), float((p.get("metadata") or {})["lon"]))
         for p in search_results
@@ -143,6 +146,24 @@ async def _geo_enrich_places(state: dict) -> dict:
         )
     else:
         focus_lat, focus_lon = GEO_FOCUS_LAT, GEO_FOCUS_LON
+
+    # Acceptance envelope for ORS results: the bounding box of the result's known-good
+    # payload coordinates, expanded by a margin. ORS can return a plausible point that
+    # is inside Georgia but in the wrong region (place-name collisions); such points
+    # fall outside this envelope and are discarded.
+    # Requires at least two anchors: a single payload coordinate would make the envelope
+    # an arbitrary point±margin box that could wrongly reject legitimate places far from
+    # the lone anchor inside a large region. With fewer than two anchors we cannot bound
+    # the result without external region data, so only the country-level box applies.
+    if len(_payload_coords) >= 2:
+        from config.settings import get_settings
+        margin = get_settings().geo_coord_envelope_margin_deg
+        lats = [c[0] for c in _payload_coords]
+        lons = [c[1] for c in _payload_coords]
+        coord_envelope = (min(lats) - margin, max(lats) + margin,
+                          min(lons) - margin, max(lons) + margin)
+    else:
+        coord_envelope = None
 
     # Step 1: geocode all places concurrently.
     async def geocode_place(place: dict) -> dict:
@@ -185,15 +206,20 @@ async def _geo_enrich_places(state: dict) -> dict:
             result = await cached_geocode_city(query, focus_lat=focus_lat, focus_lon=focus_lon)
             if "lat" in result and "lon" in result:
                 lat, lon = result["lat"], result["lon"]
-                if _in_georgia(lat, lon):
-                    enriched["lat"] = lat
-                    enriched["lon"] = lon
-                    enriched["coord_source"] = "ors"
-                else:
+                if not _in_georgia(lat, lon):
                     logger.warning(
                         f"[{request_id}] geocode '{query}' → ({lat:.3f},{lon:.3f}) "
                         f"outside Georgia — discarding"
                     )
+                elif coord_envelope and not _in_envelope(lat, lon, coord_envelope):
+                    logger.warning(
+                        f"[{request_id}] geocode '{query}' → ({lat:.3f},{lon:.3f}) "
+                        f"outside expected region envelope — discarding"
+                    )
+                else:
+                    enriched["lat"] = lat
+                    enriched["lon"] = lon
+                    enriched["coord_source"] = "ors"
             return enriched
         except Exception as e:
             logger.warning(f"[{request_id}] geocode failed for '{query}': {e}")
