@@ -31,3 +31,13 @@ build/
 *.egg-info/
 .DS_Store
 checkpoints.db*
+
+# Private working plan — never published (open-source hygiene)
+plan.md
+
+# Local scratch / diagnostics
+fast_test.py
+diag_qdrant.py
+
+# Generated migration artifact (rebuilt by scripts/migrations/build_id_map.py)
+qdrant_id_map.json

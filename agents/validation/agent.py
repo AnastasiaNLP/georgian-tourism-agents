@@ -7,9 +7,10 @@ Node wrapper: validation_agent_node(state: dict) → dict
 """
 from __future__ import annotations
 import logging
+import math
 import re
 
-from agents.base import extract_pace, make_scratchpad
+from agents.base import extract_pace, make_scratchpad, route_key
 
 logger = logging.getLogger(__name__)
 
@@ -33,26 +34,25 @@ async def validation_agent_node(state: dict) -> dict:
         }
 
     pace = extract_pace(state)
-    distances = state.get("distance_matrix") or {}
     history = state.get("agent_history") or []
     planning_count = history.count("planning_agent")
 
+    # Only trust geo data produced in THIS turn. enriched_places and distance_matrix
+    # persist in the checkpoint across turns; on a revision turn (geo step skipped)
+    # they are stale and must not drive distance checks. agent_history is reset every
+    # turn, so it reliably signals whether the geo step ran now.
+    geo_ran = "geo_agent" in history
+    distances = (state.get("distance_matrix") or {}) if geo_ran else {}
+    # Ground-truth coordinates from the geo step let us check that the itinerary's
+    # reported distances are physically plausible, instead of trusting the planner's
+    # self-reported numbers.
+    coords_by_name = _coords_by_name(state.get("enriched_places") or []) if geo_ran else {}
+
     # First pass: deterministic validation.
-    result = _auto_validate(itinerary, pace, distances)
+    result = _auto_validate(itinerary, pace, distances, coords_by_name)
 
-    if not result["errors"] and not result["warnings"]:
-        logger.info(f"[{request_id}] validation_agent: auto PASSED (0 LLM calls)")
-        return {
-            "validation_result": result,
-            "agent_history": ["validation_agent"],
-            "agent_scratchpad": make_scratchpad(
-                "validation_agent",
-                f"PASSED (programmatic): score={result['score']}",
-                is_valid=True, action="proceed"
-            ),
-        }
-
-    # Hard errors do not need LLM review.
+    # Hard errors (including reported distances that fall below the measured route)
+    # do not need LLM review — re-plan, or proceed degraded once retries are spent.
     if result["errors"]:
         is_degraded = planning_count >= 2
         if is_degraded:
@@ -78,6 +78,38 @@ async def validation_agent_node(state: dict) -> dict:
             return_dict["raw_itinerary"] = {}
             return_dict["enriched_itinerary"] = {}
         return return_dict
+
+    # Too few legs could be measured (e.g. geocoding/routing failures). Re-planning
+    # will not recover the missing data, so proceed in degraded mode and let the
+    # response disclose the reduced confidence to the user.
+    if result.get("low_distance_confidence"):
+        logger.info(
+            f"[{request_id}] validation_agent: distance grounding below threshold "
+            f"→ degraded (proceed, no retry)"
+        )
+        return {
+            "validation_result": result,
+            "execution_mode": "degraded",
+            "errors": ["validation: route distances could not be verified — geo data incomplete"],
+            "agent_history": ["validation_agent"],
+            "agent_scratchpad": make_scratchpad(
+                "validation_agent",
+                f"DEGRADED: low distance grounding (score={result['score']})",
+                is_valid=result["is_valid"], action="proceed"
+            ),
+        }
+
+    if not result["warnings"]:
+        logger.info(f"[{request_id}] validation_agent: auto PASSED (0 LLM calls)")
+        return {
+            "validation_result": result,
+            "agent_history": ["validation_agent"],
+            "agent_scratchpad": make_scratchpad(
+                "validation_agent",
+                f"PASSED (programmatic): score={result['score']}",
+                is_valid=True, action="proceed"
+            ),
+        }
 
     # Warnings may use one optional LLM call for a final verdict.
     tracker = TokenTracker(model="gpt-4o-mini")
@@ -148,10 +180,13 @@ async def validation_agent_node(state: dict) -> dict:
     }
 
 
-def _auto_validate(itinerary: dict, pace: str, distances: dict) -> dict:
+def _auto_validate(itinerary: dict, pace: str, distances: dict,
+                   coords_by_name: dict | None = None) -> dict:
     """Validate an itinerary without LLM calls."""
     from config.settings import get_settings
     s = get_settings()
+
+    coords_by_name = coords_by_name or {}
 
     errors = []
     warnings = []
@@ -167,9 +202,12 @@ def _auto_validate(itinerary: dict, pace: str, distances: dict) -> dict:
         "intensive": s.validation_max_acts_intensive,
     }.get(pace, s.validation_max_acts_moderate)
     max_driving_hours = s.validation_max_driving_hours
+    tolerance = s.validation_distance_tolerance
 
     days = itinerary.get("days", [])
     all_normalized_names = []
+    total_legs = 0
+    covered_legs = 0
 
     for day in days:
         day_num = day.get("day", "?")
@@ -197,6 +235,18 @@ def _auto_validate(itinerary: dict, pace: str, distances: dict) -> dict:
         if hours > max_driving_hours:
             errors.append(f"Day {day_num}: {hours:.1f}h driving > {max_driving_hours}h daily limit")
 
+        # Cross-check the reported distance against the measured route. The measured
+        # value is a lower bound (driving distance >= straight line), so a reported
+        # total falling below it past the tolerance means the planner under-counted.
+        measured_km, covered, legs = _measure_day_distance(acts, distances, coords_by_name)
+        total_legs += legs
+        covered_legs += covered
+        if covered > 0 and measured_km > 0 and km < measured_km * (1 - tolerance):
+            errors.append(
+                f"Day {day_num}: reported {km:.0f} km but measured route is "
+                f"~{measured_km:.0f} km"
+            )
+
         for a in acts:
             norm = _normalize_place_name(a.get("name", ""))
             if norm and norm in all_normalized_names:
@@ -204,6 +254,15 @@ def _auto_validate(itinerary: dict, pace: str, distances: dict) -> dict:
                     f"Day {day_num}: '{a.get('name')}' already appeared in a previous day"
                 )
             all_normalized_names.append(norm)
+
+    # Distance grounding: only meaningful when geo data exists this turn. On flows
+    # where the geo step is skipped (no matrix and no coordinates) we cannot judge
+    # grounding and must not flag low confidence.
+    has_ground_truth = bool(distances) or bool(coords_by_name)
+    grounding = (covered_legs / total_legs) if total_legs else 1.0
+    low_distance_confidence = bool(
+        has_ground_truth and total_legs > 0 and grounding < s.validation_min_grounding
+    )
 
     score = max(0.0, round(1.0 - len(errors) * 0.3 - len(warnings) * 0.1, 2))
     action = "retry" if errors else "proceed"
@@ -214,7 +273,71 @@ def _auto_validate(itinerary: dict, pace: str, distances: dict) -> dict:
         "errors": errors,
         "warnings": warnings,
         "recommended_action": action,
+        "low_distance_confidence": low_distance_confidence,
+        "distance_grounding": round(grounding, 2),
     }
+
+
+def _coords_by_name(enriched_places: list) -> dict:
+    """Map normalized place name → (lat, lon) for places geocoded by the geo step."""
+    coords = {}
+    for p in enriched_places:
+        lat, lon = p.get("lat"), p.get("lon")
+        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+            norm = _normalize_place_name(p.get("name", ""))
+            if norm:
+                coords[norm] = (float(lat), float(lon))
+    return coords
+
+
+def _matrix_lookup(distances: dict, name_a: str, name_b: str) -> float | None:
+    """Return measured driving km between two places from the geo distance matrix."""
+    entry = distances.get(route_key(name_a, name_b)) or distances.get(route_key(name_b, name_a))
+    if isinstance(entry, dict) and entry.get("km", 0) > 0:
+        return float(entry["km"])
+    return None
+
+
+def _measure_day_distance(acts: list, distances: dict, coords_by_name: dict) -> tuple:
+    """Measure a day's route length from ground-truth data.
+
+    For each consecutive pair, prefer the measured driving distance from the geo
+    matrix; fall back to the straight-line distance between geocoded coordinates
+    (a physical lower bound). Pairs with neither source are left uncovered.
+
+    Returns (measured_km, covered_legs, total_legs).
+    """
+    total_legs = 0
+    covered_legs = 0
+    measured_km = 0.0
+    for a, b in zip(acts, acts[1:]):
+        total_legs += 1
+        name_a = a.get("name", "")
+        name_b = b.get("name", "")
+
+        leg = _matrix_lookup(distances, name_a, name_b)
+        if leg is not None:
+            measured_km += leg
+            covered_legs += 1
+            continue
+
+        ca = coords_by_name.get(_normalize_place_name(name_a))
+        cb = coords_by_name.get(_normalize_place_name(name_b))
+        if ca and cb:
+            measured_km += _haversine_km(ca[0], ca[1], cb[0], cb[1])
+            covered_legs += 1
+
+    return measured_km, covered_legs, total_legs
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two points."""
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h))
 
 
 def _normalize_place_name(name: str) -> str:

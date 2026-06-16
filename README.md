@@ -57,6 +57,10 @@ Use this command locally to avoid loading unrelated system pytest plugins:
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -q -m 'not online'
 ```
 
+Disabling plugin autoload is required to skip a system pytest plugin that breaks
+collection. `pyproject.toml` force-loads `pytest-asyncio` via `addopts`, so async
+tests still run (and are not silently skipped) under this command.
+
 Online tests are skipped by default. They call external services and may spend
 provider credits:
 

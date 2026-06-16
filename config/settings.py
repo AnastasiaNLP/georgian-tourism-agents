@@ -74,6 +74,12 @@ class Settings(BaseModel, frozen=True):
     validation_max_acts_moderate: int = 4
     validation_max_acts_intensive: int = 6
     validation_max_driving_hours: int = 4
+    # How far a day's reported distance may fall below the measured route before
+    # it is treated as an error (0.25 = reported may be up to 25% lower).
+    validation_distance_tolerance: float = 0.25
+    # Minimum fraction of route legs that must have a measured distance before
+    # the itinerary is trusted; below this the run is marked degraded.
+    validation_min_grounding: float = 0.5
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -92,6 +98,13 @@ def _get_int(name: str, default: int) -> int:
     if value is None:
         return default
     return int(value)
+
+
+def _get_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return float(value)
 
 
 @lru_cache
@@ -143,4 +156,6 @@ def get_settings() -> Settings:
         validation_max_acts_moderate=_get_int("VALIDATION_MAX_ACTS_MODERATE", 4),
         validation_max_acts_intensive=_get_int("VALIDATION_MAX_ACTS_INTENSIVE", 6),
         validation_max_driving_hours=_get_int("VALIDATION_MAX_DRIVING_HOURS", 4),
+        validation_distance_tolerance=_get_float("VALIDATION_DISTANCE_TOLERANCE", 0.25),
+        validation_min_grounding=_get_float("VALIDATION_MIN_GROUNDING", 0.5),
     )

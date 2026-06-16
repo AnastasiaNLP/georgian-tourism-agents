@@ -13,7 +13,7 @@ import logging
 
 from langchain_core.tools import tool
 
-from agents.base import make_scratchpad
+from agents.base import make_scratchpad, route_key
 from src.tools.geo_tools import GEO_FOCUS_LAT, GEO_FOCUS_LON
 
 logger = logging.getLogger(__name__)
@@ -215,15 +215,15 @@ async def _geo_enrich_places(state: dict) -> dict:
     distance_matrix = {}
 
     async def get_distance(a: dict, b: dict) -> tuple:
-        key = f"{a['name'][:25]}→{b['name'][:25]}"
+        a_name, b_name = a["name"], b["name"]
         try:
             result = await cached_get_route(a["lon"], a["lat"], b["lon"], b["lat"])
             if "distance_km" in result:
                 val = {"km": result["distance_km"], "hours": result["duration_min"] / 60}
-                return key, val
+                return a_name, b_name, val
         except Exception as e:
-            logger.warning(f"[{request_id}] route failed for '{key}': {e}")
-        return key, {"km": 0, "hours": 0}
+            logger.warning(f"[{request_id}] route failed for '{route_key(a_name, b_name)}': {e}")
+        return a_name, b_name, {"km": 0, "hours": 0}
 
     # Chain: 0→1, 1→2, ..., n-1→n.
     route_pairs = []
@@ -238,10 +238,10 @@ async def _geo_enrich_places(state: dict) -> dict:
         route_results = await asyncio.gather(
             *[get_distance(a, b) for a, b in route_pairs]
         )
-        for key, val in route_results:
+        for a_name, b_name, val in route_results:
             if val["km"] > 0:
-                distance_matrix[key] = val
-                reverse_key = "→".join(reversed(key.split("→")))
+                distance_matrix[route_key(a_name, b_name)] = val
+                reverse_key = route_key(b_name, a_name)
                 if reverse_key not in distance_matrix:
                     distance_matrix[reverse_key] = val
 

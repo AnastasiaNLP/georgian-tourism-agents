@@ -13,6 +13,15 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def route_key(name_a: str, name_b: str) -> str:
+    """Stable key for a directed route leg in the distance matrix.
+
+    Shared by the geo step (which builds the matrix) and validation (which reads
+    it) so the two cannot drift apart. Names are truncated to keep keys compact.
+    """
+    return f"{name_a[:25]}→{name_b[:25]}"
+
+
 def extract_search_params(state: dict) -> dict:
     """
     Extract search parameters from orchestrator_params and state.

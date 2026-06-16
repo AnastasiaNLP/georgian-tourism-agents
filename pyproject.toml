@@ -3,9 +3,13 @@
 # that break pytest 8.x (they're injected via shell's PYTHONPATH).
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# Scope collection to tests/ so stray scripts in the repo root cannot break it.
+testpaths = ["tests"]
 # Online tests are excluded by default — they hit real APIs and cost money.
 # To run them: PYTHONPATH=. pytest -m online tests/online/
-addopts = ["-m", "not online"]
+# pytest-asyncio is force-loaded so async tests run even when plugin autoload is
+# disabled (PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, needed to skip a system ROS plugin).
+addopts = ["-m", "not online", "-p", "pytest_asyncio.plugin"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [

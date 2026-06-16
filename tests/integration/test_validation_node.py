@@ -104,3 +104,49 @@ async def test_after_two_planning_attempts_no_retry(state_with_itinerary):
     from agents.validation.agent import validation_agent_node
     result = await validation_agent_node(state_with_itinerary)
     assert result["validation_result"]["recommended_action"] == "proceed"
+
+
+@pytest.mark.asyncio
+async def test_low_distance_grounding_degrades_and_proceeds():
+    """Geo ran but covered none of the day's legs → degrade, disclose, do not retry."""
+    state = {
+        "request_id": "val-degrade",
+        "raw_itinerary": {
+            "days": [{"day": 1,
+                      "activities": [{"name": "A"}, {"name": "B"}, {"name": "C"}],
+                      "total_distance_km": 30, "total_driving_hours": 1}]
+        },
+        # Geo ran this turn but the matrix has no entry for these places,
+        # and there are no coordinates to fall back on.
+        "distance_matrix": {"Foo→Bar": {"km": 10, "hours": 0.2}},
+        "agent_history": ["search_agent", "geo_agent", "planning_agent"],
+        "trip_parameters": {"pace": "moderate"},
+    }
+    from agents.validation.agent import validation_agent_node
+    result = await validation_agent_node(state)
+    assert result["execution_mode"] == "degraded"
+    assert result["validation_result"]["recommended_action"] == "proceed"
+    assert result["validation_result"]["low_distance_confidence"] is True
+
+
+@pytest.mark.asyncio
+async def test_revision_without_geo_does_not_falsely_degrade():
+    """A revision turn (geo skipped) must ignore stale checkpointed geo data."""
+    state = {
+        "request_id": "val-revise",
+        "raw_itinerary": {
+            "days": [{"day": 1,
+                      "activities": [{"name": "A"}, {"name": "B"}],
+                      "total_distance_km": 30, "total_driving_hours": 1}]
+        },
+        # Stale carryover from a previous PLAN turn — must not be trusted now.
+        "distance_matrix": {"Foo→Bar": {"km": 10, "hours": 0.2}},
+        "enriched_places": [{"name": "Old Place", "lat": 41.7, "lon": 44.8}],
+        # geo_agent is absent from this turn's history.
+        "agent_history": ["revision_agent"],
+        "trip_parameters": {"pace": "moderate"},
+    }
+    from agents.validation.agent import validation_agent_node
+    result = await validation_agent_node(state)
+    assert result.get("execution_mode") != "degraded"
+    assert result["validation_result"]["low_distance_confidence"] is False

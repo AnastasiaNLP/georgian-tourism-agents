@@ -2,7 +2,11 @@
 """Unit tests for agents/validation/agent.py and _auto_validate."""
 
 import pytest
-from agents.validation.agent import _auto_validate, _normalize_place_name
+from agents.validation.agent import (
+    _auto_validate,
+    _haversine_km,
+    _normalize_place_name,
+)
 
 
 class TestAutoValidate:
@@ -128,6 +132,86 @@ class TestAutoValidate:
 
         assert result["is_valid"] is False
         assert any("exceeds" in e for e in result["errors"])
+
+
+class TestDistanceGrounding:
+    """Reported distances are cross-checked against measured route data."""
+
+    def test_under_report_via_matrix_is_error(self):
+        """Reported km far below the measured driving distance → error → retry."""
+        itinerary = {
+            "days": [{"day": 1,
+                      "activities": [{"name": "Place A"}, {"name": "Place B"}],
+                      "total_distance_km": 10, "total_driving_hours": 1}]
+        }
+        distances = {"Place A→Place B": {"km": 200, "hours": 3}}
+        result = _auto_validate(itinerary, "moderate", distances)
+        assert result["is_valid"] is False
+        assert any("measured route" in e for e in result["errors"])
+        assert result["recommended_action"] == "retry"
+
+    def test_under_report_via_haversine_is_error(self):
+        """With no matrix entry, the straight-line lower bound still catches under-reporting."""
+        itinerary = {
+            "days": [{"day": 1,
+                      "activities": [{"name": "Place A"}, {"name": "Place B"}],
+                      "total_distance_km": 10, "total_driving_hours": 1}]
+        }
+        # Tbilisi ~ Batumi: ~270 km straight line.
+        coords = {
+            "placea": (41.72, 44.79),
+            "placeb": (41.64, 41.64),
+        }
+        result = _auto_validate(itinerary, "moderate", {}, coords)
+        assert result["is_valid"] is False
+        assert any("measured route" in e for e in result["errors"])
+
+    def test_accurate_plan_passes(self):
+        """Reported distance at or above the measured route is accepted."""
+        itinerary = {
+            "days": [{"day": 1,
+                      "activities": [{"name": "Place A"}, {"name": "Place B"}],
+                      "total_distance_km": 110, "total_driving_hours": 1.5}]
+        }
+        distances = {"Place A→Place B": {"km": 100, "hours": 1.4}}
+        coords = {"placea": (41.72, 44.79), "placeb": (41.79, 44.82)}
+        result = _auto_validate(itinerary, "moderate", distances, coords)
+        assert result["is_valid"] is True
+        assert result["low_distance_confidence"] is False
+
+    def test_low_grounding_flags_degrade(self):
+        """Geo data exists but covers none of the day's legs → low confidence flag."""
+        itinerary = {
+            "days": [{"day": 1,
+                      "activities": [{"name": "A"}, {"name": "B"}, {"name": "C"}],
+                      "total_distance_km": 30, "total_driving_hours": 1}]
+        }
+        # Matrix is non-empty (geo ran) but has no entry for this day's pairs,
+        # and no coordinates are supplied for A/B/C.
+        distances = {"Foo→Bar": {"km": 10, "hours": 0.2}}
+        result = _auto_validate(itinerary, "moderate", distances)
+        assert result["low_distance_confidence"] is True
+        assert result["distance_grounding"] == 0.0
+
+    def test_no_geo_data_no_false_degrade(self):
+        """No matrix and no coordinates (e.g. geo step skipped) → no low-confidence flag."""
+        itinerary = {
+            "days": [{"day": 1,
+                      "activities": [{"name": "A"}, {"name": "B"}],
+                      "total_distance_km": 30, "total_driving_hours": 1}]
+        }
+        result = _auto_validate(itinerary, "moderate", {})
+        assert result["low_distance_confidence"] is False
+
+
+class TestHaversine:
+    def test_known_distance(self):
+        """Tbilisi → Batumi is roughly 270 km in a straight line."""
+        km = _haversine_km(41.72, 44.79, 41.64, 41.64)
+        assert 250 < km < 290
+
+    def test_zero_for_same_point(self):
+        assert _haversine_km(41.7, 44.8, 41.7, 44.8) == pytest.approx(0.0, abs=1e-6)
 
 
 class TestNormalizePlaceName:
