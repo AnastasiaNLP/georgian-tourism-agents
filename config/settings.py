@@ -66,6 +66,15 @@ class Settings(BaseModel, frozen=True):
     feature_enable_eval: bool = False
     max_search_results: int = 10
 
+    # Validation thresholds (override per deployment via env)
+    validation_max_km_relaxed: int = 100
+    validation_max_km_moderate: int = 150
+    validation_max_km_intensive: int = 200
+    validation_max_acts_relaxed: int = 3
+    validation_max_acts_moderate: int = 4
+    validation_max_acts_intensive: int = 6
+    validation_max_driving_hours: int = 4
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -127,4 +136,11 @@ def get_settings() -> Settings:
         feature_enable_validation=_get_bool("FEATURE_ENABLE_VALIDATION", True),
         feature_enable_eval=_get_bool("FEATURE_ENABLE_EVAL", False),
         max_search_results=_get_int("MAX_SEARCH_RESULTS", 10),
+        validation_max_km_relaxed=_get_int("VALIDATION_MAX_KM_RELAXED", 100),
+        validation_max_km_moderate=_get_int("VALIDATION_MAX_KM_MODERATE", 150),
+        validation_max_km_intensive=_get_int("VALIDATION_MAX_KM_INTENSIVE", 200),
+        validation_max_acts_relaxed=_get_int("VALIDATION_MAX_ACTS_RELAXED", 3),
+        validation_max_acts_moderate=_get_int("VALIDATION_MAX_ACTS_MODERATE", 4),
+        validation_max_acts_intensive=_get_int("VALIDATION_MAX_ACTS_INTENSIVE", 6),
+        validation_max_driving_hours=_get_int("VALIDATION_MAX_DRIVING_HOURS", 4),
     )

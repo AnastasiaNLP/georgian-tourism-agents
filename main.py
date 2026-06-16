@@ -35,7 +35,6 @@ async def lifespan(app: FastAPI):
     Lifecycle manager.
     Build the graph and checkpointer once at startup.
     """
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from graph.main_graph import build_graph
     from agents.registry import get_registry
 
@@ -50,23 +49,28 @@ async def lifespan(app: FastAPI):
     logger.info("InputGuardrails initialized")
 
     settings = get_settings()
-    async with AsyncPostgresSaver.from_conn_string(settings.database_url) as checkpointer:
-        await checkpointer.setup()
-        app.state.graph = build_graph(checkpointer=checkpointer)
-        logger.info("LangGraph compiled with AsyncPostgresSaver")
 
-        from src.memory.db import init_pool
-        from src.memory.memory_manager import get_memory_manager
-        await init_pool(settings.database_url)
-        await get_memory_manager().setup()
-        logger.info("MemoryManager schema ready")
+    # Single shared pool for checkpointer + MemoryManager — avoids two separate
+    # connections to the same Postgres instance.
+    from src.memory.db import init_pool, close_pool
+    pool = await init_pool(settings.database_url)
 
-        from src.tools.embeddings import get_embedding_model
-        logger.info("Warming up embedding model...")
-        await asyncio.to_thread(get_embedding_model)
-        logger.info("Embedding model ready")
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    checkpointer = AsyncPostgresSaver(conn=pool)
+    await checkpointer.setup()
+    app.state.graph = build_graph(checkpointer=checkpointer)
+    logger.info("LangGraph compiled with AsyncPostgresSaver (shared pool)")
 
-        yield
+    from src.memory.memory_manager import get_memory_manager
+    await get_memory_manager().setup()
+    logger.info("MemoryManager schema ready")
+
+    from src.tools.embeddings import get_embedding_model
+    logger.info("Warming up embedding model...")
+    await asyncio.to_thread(get_embedding_model)
+    logger.info("Embedding model ready")
+
+    yield
 
     from src.tools.tool_cache import get_cache
     await get_cache().aclose()
@@ -74,7 +78,6 @@ async def lifespan(app: FastAPI):
     from src.memory.memory_manager import get_memory_manager
     await get_memory_manager().aclose()
 
-    from src.memory.db import close_pool
     await close_pool()
     logger.info("Shutdown complete")
 

@@ -86,7 +86,8 @@ RULES:
 - Copy coordinates exactly from the data for each activity
 - Each day: 2–{max_acts} activities (never 1, never more than {max_acts})
 - Remote places (>60 km from base) need a full day allocated
-- total_distance_km must include RETURN trips for out-and-back destinations{retry_note}
+- total_distance_km must include RETURN trips for out-and-back destinations
+- [coord:qdrant_payload] = verified GPS; [coord:ors] = geocoded approximation. Prefer grouping verified places together when distances make it reasonable{retry_note}
 
 OUTPUT — ONLY valid JSON, no markdown, no explanation:
 {{"days": [{{"day": 1, "location": "Area name", "activities": [{{"name": "...",
@@ -151,9 +152,11 @@ def _format_rich_places(places: list, distances: dict) -> str:
         coord_str = f"lat={lat}, lon={lon}" if lat != "?" else "coordinates: unknown"
         tags_str = ", ".join(p.get("tags") or []) or "—"
         desc = (p.get("description") or "")[:150]
+        coord_src = p.get("coord_source", "")
+        coord_tag = f" [coord:{coord_src}]" if coord_src else ""
 
         lines.append(
-            f"\n[{i+1}] {p.get('name', 'Unknown')}\n"
+            f"\n[{i+1}] {p.get('name', 'Unknown')}{coord_tag}\n"
             f"  Location: {p.get('location', 'Georgia')} | {coord_str}\n"
             f"  Category: {p.get('category', '—')} | Tags: {tags_str}\n"
             f"  Description: {desc}"

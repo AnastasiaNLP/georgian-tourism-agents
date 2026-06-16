@@ -150,11 +150,23 @@ async def validation_agent_node(state: dict) -> dict:
 
 def _auto_validate(itinerary: dict, pace: str, distances: dict) -> dict:
     """Validate an itinerary without LLM calls."""
+    from config.settings import get_settings
+    s = get_settings()
+
     errors = []
     warnings = []
-    max_km = {"relaxed": 100, "moderate": 150, "intensive": 200}.get(pace, 150)
+    max_km = {
+        "relaxed": s.validation_max_km_relaxed,
+        "moderate": s.validation_max_km_moderate,
+        "intensive": s.validation_max_km_intensive,
+    }.get(pace, s.validation_max_km_moderate)
     min_acts = 2
-    max_acts = {"relaxed": 3, "moderate": 4, "intensive": 6}.get(pace, 4)
+    max_acts = {
+        "relaxed": s.validation_max_acts_relaxed,
+        "moderate": s.validation_max_acts_moderate,
+        "intensive": s.validation_max_acts_intensive,
+    }.get(pace, s.validation_max_acts_moderate)
+    max_driving_hours = s.validation_max_driving_hours
 
     days = itinerary.get("days", [])
     all_normalized_names = []
@@ -182,8 +194,8 @@ def _auto_validate(itinerary: dict, pace: str, distances: dict) -> dict:
                 f"— distance data missing"
             )
 
-        if hours > 4:
-            errors.append(f"Day {day_num}: {hours:.1f}h driving > 4h daily limit")
+        if hours > max_driving_hours:
+            errors.append(f"Day {day_num}: {hours:.1f}h driving > {max_driving_hours}h daily limit")
 
         for a in acts:
             norm = _normalize_place_name(a.get("name", ""))

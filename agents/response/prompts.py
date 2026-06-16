@@ -17,7 +17,7 @@ _LANG_NAMES = {
 }
 
 
-def get_response_prompt(language: str = "en", mode: str = "normal") -> str:
+def get_response_prompt(language: str = "en", mode: str = "normal", intent: str = "") -> str:
     lang_name = _LANG_NAMES.get(language, language.upper())
 
     degraded_note = ""
@@ -27,14 +27,24 @@ def get_response_prompt(language: str = "en", mode: str = "normal") -> str:
             f"Mention this briefly in {lang_name}.\n"
         )
 
+    if intent in {"INFO", "SEARCH"}:
+        intent_note = (
+            f"\nMODE: This is an informational query, not a trip-planning request. "
+            f"Answer the question directly and concisely. "
+            f"Do NOT impose a day-by-day itinerary structure unless the user explicitly asked for one. "
+            f"If the user asked about a place, activity, or fact — answer that question. "
+            f"If search results are provided, summarise them as a helpful list.\n"
+        )
+    else:
+        intent_note = ""
+
     return f"""\
 You are ResponseAgent — you format the final travel response for the user.
 
 CRITICAL LANGUAGE RULE: The user wrote their request in {lang_name}.
 You MUST respond entirely in {lang_name}. Every word of your response must be in {lang_name}.
 Do NOT use English if the user's language is not English.
-
-{degraded_note}
+{degraded_note}{intent_note}
 YOUR TASK: Create a friendly, helpful travel response from the provided data.
 
 FORMAT:

@@ -46,7 +46,7 @@ async def response_agent_node(state: dict) -> dict:
         timeout=60,
     )
 
-    system_prompt = get_response_prompt(language=user_language, mode=execution_mode)
+    system_prompt = get_response_prompt(language=user_language, mode=execution_mode, intent=intent)
 
     # Build LLM input content.
     import json

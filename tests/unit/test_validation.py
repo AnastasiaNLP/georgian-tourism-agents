@@ -104,6 +104,32 @@ class TestAutoValidate:
         assert result["recommended_action"] == "proceed"
 
 
+    def test_auto_validate_uses_settings_thresholds(self):
+        """_auto_validate reads km/acts/driving limits from settings, not hardcoded values."""
+        from unittest.mock import patch, MagicMock
+
+        mock_settings = MagicMock()
+        mock_settings.validation_max_km_moderate = 50   # lower than default 150
+        mock_settings.validation_max_km_relaxed = 40
+        mock_settings.validation_max_km_intensive = 60
+        mock_settings.validation_max_acts_moderate = 3
+        mock_settings.validation_max_acts_relaxed = 2
+        mock_settings.validation_max_acts_intensive = 5
+        mock_settings.validation_max_driving_hours = 2
+
+        itinerary = {
+            "days": [{"day": 1,
+                      "activities": [{"name": "A"}, {"name": "B"}],
+                      "total_distance_km": 80,  # > custom limit 50, < default 150
+                      "total_driving_hours": 1}]
+        }
+        with patch("config.settings.get_settings", return_value=mock_settings):
+            result = _auto_validate(itinerary, "moderate", {})
+
+        assert result["is_valid"] is False
+        assert any("exceeds" in e for e in result["errors"])
+
+
 class TestNormalizePlaceName:
     def test_lowercase(self):
         assert _normalize_place_name("Batumi Boulevard") == "batumiboulevard"

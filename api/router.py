@@ -244,6 +244,6 @@ async def readiness(http_request: Request):
 
 
 @router.get("/health")
-async def health(http_request: Request):
-    """Legacy alias → readiness."""
-    return await readiness(http_request)
+async def health():
+    """Legacy alias → liveness (Docker HEALTHCHECK target)."""
+    return await liveness()
