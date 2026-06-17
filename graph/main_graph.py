@@ -45,23 +45,6 @@ def _plan_to_dict(plan) -> dict:
     }
 
 
-def _agent_from_step(step) -> str:
-    return step.get("agent") if isinstance(step, dict) else step.agent
-
-
-def _params_from_step(step) -> dict:
-    return (step.get("params") if isinstance(step, dict) else step.params) or {}
-
-
-def _merged_orchestrator_params(steps: list) -> dict:
-    merged = {}
-    for step in steps:
-        params = _params_from_step(step)
-        if params:
-            merged.update(params)
-    return merged
-
-
 async def memory_load_node(state: TravelPlanningState) -> dict:
     request_id = state.get("request_id", "unknown")
     user_id = state.get("user_id")
@@ -151,7 +134,6 @@ async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
     tracker = TokenTracker(model="claude-haiku-4-5-20251001")
     classification = await _get_orchestrator().classify(state, callbacks=[tracker])
     plan_dict = _plan_to_dict(classification)
-    steps = plan_dict.get("steps") or []
     intent = classification.intent if hasattr(classification, "intent") else plan_dict.get("intent", "INFO")
     params = {
         "region": getattr(classification, "region", ""),
@@ -184,8 +166,7 @@ async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
             orchestration_dict = {**orchestration_dict, "intent": "CONSULT"}
 
     logger.info(
-        f"[{request_id}] classifier: intent={intent}, "
-        f"params={params}, llm_plan={[_agent_from_step(step) for step in steps]}"
+        f"[{request_id}] classifier: intent={intent}, params={params}, next={next_agent}"
     )
 
     return {
@@ -193,7 +174,10 @@ async def orchestrator_plan_node(state: TravelPlanningState) -> dict:
         "orchestrator_decision": next_agent,
         "orchestrator_params": params,
         "intent": intent,
-        "conversation_stage": getattr(classification, "conversation_stage", intent),
+        # Mirror the final (post consent-guard) intent. The classifier's own
+        # conversation_stage can lag behind — e.g. it says PLAN while the consent
+        # guard has just downgraded the turn to CONSULT — so derive it from intent.
+        "conversation_stage": intent,
         "feedback": state.get("user_query", "") if intent == "REVISE" else state.get("feedback", ""),
         "trip_parameters": {
             "days": params.get("days"),

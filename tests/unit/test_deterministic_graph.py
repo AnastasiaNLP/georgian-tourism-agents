@@ -48,31 +48,11 @@ def test_validation_empty_result_defaults_to_response():
     assert route_after_validation({"validation_result": {}}) == "response_agent"
 
 
-def test_orchestrator_params_are_merged_from_steps():
-    from graph.main_graph import _merged_orchestrator_params
-
-    steps = [
-        {
-            "agent": "search_agent",
-            "params": {
-                "region": "Kakheti",
-                "search_query": "wine vineyard monastery",
-                "max_results": 10,
-            },
-        },
-        {
-            "agent": "planning_agent",
-            "params": {"days": 2, "pace": "relaxed"},
-        },
-    ]
-
-    assert _merged_orchestrator_params(steps) == {
-        "region": "Kakheti",
-        "search_query": "wine vineyard monastery",
-        "max_results": 10,
-        "days": 2,
-        "pace": "relaxed",
-    }
+def test_step_param_helpers_removed():
+    """Legacy step helpers were production-dead — routing reads classification fields directly."""
+    import graph.main_graph as m
+    for name in ("_merged_orchestrator_params", "_params_from_step", "_agent_from_step"):
+        assert not hasattr(m, name), f"{name} was dead code and must be removed"
 
 
 def test_run_graph_removed():
